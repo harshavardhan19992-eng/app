@@ -4,13 +4,15 @@ import { api, API } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { formatINR, STATUS_COLOR, STATUS_LABEL, cn } from "@/lib/utils";
-import { Calendar, MapPin, Download, PawPrint, ArrowRight, Receipt } from "lucide-react";
+import { Calendar, MapPin, Download, PawPrint, ArrowRight, Receipt, Gift, Copy, Check } from "lucide-react";
 import { toast } from "sonner";
 
 export default function CustomerDashboard() {
   const { user, loading } = useAuth();
   const [bookings, setBookings] = useState([]);
   const [fetching, setFetching] = useState(true);
+  const [referral, setReferral] = useState(null);
+  const [copied, setCopied] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -24,7 +26,21 @@ export default function CustomerDashboard() {
       .then((r) => setBookings(r.data))
       .catch(() => toast.error("Could not load bookings"))
       .finally(() => setFetching(false));
+    api.get("/referral").then((r) => setReferral(r.data)).catch(() => {});
   }, [user, loading, navigate]);
+
+  const copyReferral = async () => {
+    if (!referral) return;
+    const link = `${window.location.origin}/book?ref=${referral.referral_code}`;
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopied(true);
+      toast.success("Referral link copied!");
+      setTimeout(() => setCopied(false), 1800);
+    } catch {
+      toast.error("Copy failed");
+    }
+  };
 
   const downloadInvoice = (booking_id) => {
     const url = `${API}/bookings/${booking_id}/invoice.pdf`;
@@ -63,6 +79,43 @@ export default function CustomerDashboard() {
           New booking <ArrowRight className="w-4 h-4 ml-2" strokeWidth={1.75}/>
         </Button>
       </div>
+
+      {/* Referral banner */}
+      {referral && (
+        <section
+          data-testid="referral-card"
+          className="mb-10 rounded-3xl border border-[#E5DFD3] bg-gradient-to-br from-[#F1EBE1] to-[#FDFBF7] p-6 sm:p-8 flex flex-col md:flex-row items-start md:items-center gap-6 justify-between"
+        >
+          <div className="flex items-start gap-4">
+            <div className="w-12 h-12 rounded-full bg-[#D96C4A] text-white flex items-center justify-center shrink-0">
+              <Gift className="w-5 h-5" strokeWidth={1.75}/>
+            </div>
+            <div>
+              <div className="text-xs uppercase tracking-[0.25em] text-[#5C7365] mb-1">Refer a paw, get ₹200</div>
+              <div className="font-serif-display text-2xl sm:text-3xl">Share the love with fellow pet parents.</div>
+              <div className="text-sm text-[#5C7365] mt-1">
+                They save ₹200 on their first booking — you earn ₹200 credit for every friend who joins.
+              </div>
+              <div className="mt-3 flex items-center gap-3 text-xs text-[#5C7365]">
+                <span className="pill"><b className="text-[#1E3F2D]">{referral.referral_count || 0}</b> referred</span>
+                <span className="pill">₹ <b className="text-[#1E3F2D]">{referral.referral_credit_inr || 0}</b> earned</span>
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-3 w-full md:w-auto">
+            <div className="rounded-xl border border-[#E5DFD3] bg-white px-4 h-11 flex items-center font-mono text-sm">
+              {referral.referral_code}
+            </div>
+            <Button
+              data-testid="copy-referral-btn"
+              onClick={copyReferral}
+              className="rounded-full bg-[#1E3F2D] hover:bg-[#25523a] text-white h-11 px-5"
+            >
+              {copied ? <><Check className="w-4 h-4 mr-2" strokeWidth={1.75}/> Copied</> : <><Copy className="w-4 h-4 mr-2" strokeWidth={1.75}/> Copy link</>}
+            </Button>
+          </div>
+        </section>
+      )}
 
       {/* Upcoming */}
       <section className="mb-14">

@@ -28,6 +28,7 @@ export default function BookNow() {
   const [services, setServices] = useState([]);
   const [slots, setSlots] = useState([]);
   const [payInfo, setPayInfo] = useState({ upi_id: "", payee_name: "" });
+  const [referralValidation, setReferralValidation] = useState(null);
 
   const [form, setForm] = useState({
     city: initialCity,
@@ -42,6 +43,7 @@ export default function BookNow() {
     payment_mode: "cash",
     upi_txn_ref: "",
     notes: "",
+    referral_code: (search.get("ref") || "").toUpperCase(),
     items: {}, // { service_id: qty }
   });
 
@@ -74,8 +76,24 @@ export default function BookNow() {
   }, [services, form.items]);
 
   const subtotal = selectedServiceItems.reduce((sum, i) => sum + i.price * i.qty, 0);
-  const gst = Math.round(subtotal * 0.18);
-  const total = subtotal + gst;
+  const referralDiscount = referralValidation?.valid && subtotal >= (referralValidation.min_subtotal || 500)
+    ? (referralValidation.discount_inr || 0) : 0;
+  const discounted = Math.max(0, subtotal - referralDiscount);
+  const gst = Math.round(discounted * 0.18);
+  const total = discounted + gst;
+
+  const validateReferral = async () => {
+    const code = form.referral_code.trim().toUpperCase();
+    if (!code) { setReferralValidation(null); return; }
+    try {
+      const r = await api.get(`/referral/validate/${encodeURIComponent(code)}`);
+      setReferralValidation(r.data);
+      if (r.data.valid) toast.success("Referral applied — ₹200 off!");
+      else toast.error(r.data.reason || "Invalid code");
+    } catch {
+      setReferralValidation({ valid: false, reason: "Could not validate" });
+    }
+  };
 
   const canNext = () => {
     if (step === 0) return !!form.city && !!form.pet_type && !!form.pet_name.trim();
@@ -118,6 +136,7 @@ export default function BookNow() {
         payment_mode: form.payment_mode,
         upi_txn_ref: form.upi_txn_ref || null,
         notes: form.notes,
+        referral_code: form.referral_code || null,
         items: selectedServiceItems,
       };
       const r = await api.post("/bookings", payload);
@@ -151,7 +170,14 @@ export default function BookNow() {
             <StepDateAddress form={form} setForm={setForm} slots={slots} />
           )}
           {step === 3 && (
-            <StepPayment form={form} setForm={setForm} payInfo={payInfo} total={total} />
+            <StepPayment
+              form={form}
+              setForm={setForm}
+              payInfo={payInfo}
+              total={total}
+              referralValidation={referralValidation}
+              onValidateReferral={validateReferral}
+            />
           )}
 
           <div className="mt-10 flex items-center justify-between">
@@ -210,6 +236,11 @@ export default function BookNow() {
 
           <div className="mt-5 border-t border-[#E5DFD3] pt-4 space-y-1 text-sm">
             <div className="flex justify-between"><span>Subtotal</span><span>{formatINR(subtotal)}</span></div>
+            {referralDiscount > 0 && (
+              <div className="flex justify-between text-[#D96C4A]">
+                <span>Referral discount</span><span>− {formatINR(referralDiscount)}</span>
+              </div>
+            )}
             <div className="flex justify-between text-[#5C7365]"><span>GST (18%)</span><span>{formatINR(gst)}</span></div>
             <div className="flex justify-between text-lg font-medium mt-2"><span>Total</span><span className="font-serif-display text-2xl">{formatINR(total)}</span></div>
           </div>
@@ -459,7 +490,7 @@ function StepDateAddress({ form, setForm, slots }) {
   );
 }
 
-function StepPayment({ form, setForm, payInfo, total }) {
+function StepPayment({ form, setForm, payInfo, total, referralValidation, onValidateReferral }) {
   return (
     <div>
       <RadioGroup
@@ -506,6 +537,34 @@ function StepPayment({ form, setForm, payInfo, total }) {
           </div>
         </div>
       )}
+
+      {/* Referral code */}
+      <div className="mt-6 rounded-2xl border border-dashed border-[#D96C4A]/40 p-5 bg-[#FDFBF7]">
+        <div className="text-xs uppercase tracking-[0.25em] text-[#5C7365] mb-2">Got a referral code?</div>
+        <div className="font-serif-display text-xl mb-3">Save ₹200 on your first booking</div>
+        <div className="flex gap-2">
+          <Input
+            data-testid="referral-code-input"
+            placeholder="PG-XXXXXX"
+            className="rounded-xl bg-[#FDFBF7] border-[#E5DFD3] h-11 uppercase"
+            value={form.referral_code}
+            onChange={(e) => setForm((f) => ({ ...f, referral_code: e.target.value.toUpperCase() }))}
+          />
+          <Button
+            data-testid="apply-referral-btn"
+            type="button"
+            onClick={onValidateReferral}
+            className="rounded-full bg-[#D96C4A] hover:bg-[#c65e3e] text-white h-11 px-5 whitespace-nowrap"
+          >
+            Apply
+          </Button>
+        </div>
+        {referralValidation && (
+          <div className={cn("mt-2 text-xs", referralValidation.valid ? "text-emerald-700" : "text-rose-700")}>
+            {referralValidation.valid ? "✓ Applied — ₹200 off (min. subtotal ₹500)" : referralValidation.reason}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

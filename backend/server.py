@@ -51,6 +51,7 @@ class User(BaseModel):
     email: str
     name: str
     picture: Optional[str] = None
+    referral_code: Optional[str] = None
     created_at: datetime
 
 
@@ -76,6 +77,7 @@ class BookingCreate(BaseModel):
     payment_mode: str  # 'cash' | 'upi'
     upi_txn_ref: Optional[str] = None
     notes: Optional[str] = ""
+    referral_code: Optional[str] = None
 
 
 class BookingStatusUpdate(BaseModel):
@@ -221,10 +223,10 @@ async def process_session(request: Request, response: Response):
     existing = await db.users.find_one({"email": email}, {"_id": 0})
     if existing:
         user_id = existing["user_id"]
-        await db.users.update_one(
-            {"user_id": user_id},
-            {"$set": {"name": name, "picture": picture}},
-        )
+        update = {"name": name, "picture": picture}
+        if not existing.get("referral_code"):
+            update["referral_code"] = f"PG-{uuid.uuid4().hex[:6].upper()}"
+        await db.users.update_one({"user_id": user_id}, {"$set": update})
     else:
         user_id = f"user_{uuid.uuid4().hex[:12]}"
         await db.users.insert_one({
@@ -232,6 +234,7 @@ async def process_session(request: Request, response: Response):
             "email": email,
             "name": name,
             "picture": picture,
+            "referral_code": f"PG-{uuid.uuid4().hex[:6].upper()}",
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
 
@@ -335,6 +338,34 @@ def _city_by_slug(slug: str):
     return next((c for c in CITY_CATALOG if c["slug"] == slug), None)
 
 
+@api.get("/referral")
+async def my_referral(user: User = Depends(get_current_user)):
+    doc = await db.users.find_one({"user_id": user.user_id}, {"_id": 0})
+    if not doc.get("referral_code"):
+        code = f"PG-{uuid.uuid4().hex[:6].upper()}"
+        await db.users.update_one({"user_id": user.user_id}, {"$set": {"referral_code": code}})
+        doc["referral_code"] = code
+    return {
+        "referral_code": doc["referral_code"],
+        "referral_count": doc.get("referral_count", 0),
+        "referral_credit_inr": doc.get("referral_credit_inr", 0),
+    }
+
+
+@api.get("/referral/validate/{code}")
+async def validate_referral(code: str, user: User = Depends(get_current_user)):
+    code = code.strip().upper()
+    referrer = await db.users.find_one({"referral_code": code}, {"_id": 0})
+    booking_count = await db.bookings.count_documents({"user_id": user.user_id})
+    if not referrer:
+        return {"valid": False, "reason": "Code not found"}
+    if referrer["user_id"] == user.user_id:
+        return {"valid": False, "reason": "Cannot use your own code"}
+    if booking_count > 0:
+        return {"valid": False, "reason": "Only for your first booking"}
+    return {"valid": True, "discount_inr": 200, "min_subtotal": 500}
+
+
 @api.post("/bookings")
 async def create_booking(payload: BookingCreate, user: User = Depends(get_current_user)):
     city = _city_by_slug(payload.city)
@@ -344,8 +375,26 @@ async def create_booking(payload: BookingCreate, user: User = Depends(get_curren
         raise HTTPException(status_code=400, detail="No services selected")
 
     subtotal = sum(i.price * i.qty for i in payload.items)
-    gst = round(subtotal * 0.18, 2)
-    total = round(subtotal + gst, 2)
+
+    # Apply referral discount (₹200 off, first booking only, valid other-user code)
+    referral_discount = 0
+    referral_code_used = None
+    if payload.referral_code:
+        code = payload.referral_code.strip().upper()
+        referrer = await db.users.find_one({"referral_code": code}, {"_id": 0})
+        user_booking_count = await db.bookings.count_documents({"user_id": user.user_id})
+        if referrer and referrer["user_id"] != user.user_id and user_booking_count == 0 and subtotal >= 500:
+            referral_discount = 200
+            referral_code_used = code
+            # Credit the referrer
+            await db.users.update_one(
+                {"user_id": referrer["user_id"]},
+                {"$inc": {"referral_count": 1, "referral_credit_inr": 200}},
+            )
+
+    discounted_subtotal = max(0, subtotal - referral_discount)
+    gst = round(discounted_subtotal * 0.18, 2)
+    total = round(discounted_subtotal + gst, 2)
 
     booking_id = f"bkg_{uuid.uuid4().hex[:10]}"
     invoice_no = f"INV-{datetime.now(timezone.utc).strftime('%y%m')}-{uuid.uuid4().hex[:5].upper()}"
@@ -369,6 +418,8 @@ async def create_booking(payload: BookingCreate, user: User = Depends(get_curren
         "slot_time": payload.slot_time,
         "items": [i.model_dump() for i in payload.items],
         "subtotal": round(subtotal, 2),
+        "referral_code_used": referral_code_used,
+        "referral_discount": referral_discount,
         "gst": gst,
         "total": total,
         "payment_mode": payload.payment_mode,
@@ -536,6 +587,13 @@ def _build_invoice_pdf(booking: Dict[str, Any]) -> bytes:
     # Totals
     totals_data = [
         [Paragraph("Subtotal", p), Paragraph(f'₹ {booking["subtotal"]:.0f}', p)],
+    ]
+    if booking.get("referral_discount", 0) > 0:
+        totals_data.append([
+            Paragraph(f'Referral discount ({booking.get("referral_code_used","")})', p),
+            Paragraph(f'− ₹ {booking["referral_discount"]:.0f}', p),
+        ])
+    totals_data += [
         [Paragraph("GST (18%)", p), Paragraph(f'₹ {booking["gst"]:.0f}', p)],
         [Paragraph("<b>Total</b>", p), Paragraph(f'<b>₹ {booking["total"]:.0f}</b>', p)],
     ]
