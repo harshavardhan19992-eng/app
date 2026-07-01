@@ -29,6 +29,7 @@ export default function BookNow() {
   const [slots, setSlots] = useState([]);
   const [payInfo, setPayInfo] = useState({ upi_id: "", payee_name: "" });
   const [referralValidation, setReferralValidation] = useState(null);
+  const [lastGroomer, setLastGroomer] = useState(null);
 
   const [form, setForm] = useState({
     city: initialCity,
@@ -52,6 +53,7 @@ export default function BookNow() {
     upi_txn_ref: "",
     notes: "",
     referral_code: (search.get("ref") || "").toUpperCase(),
+    preferred_groomer_id: null,
     items: {}, // { service_id: qty }
   });
 
@@ -64,6 +66,7 @@ export default function BookNow() {
     api.get("/cities").then((r) => setCities(r.data));
     api.get("/slots").then((r) => setSlots(r.data));
     api.get("/payment-info").then((r) => setPayInfo(r.data));
+    api.get("/last-groomer").then((r) => setLastGroomer(r.data?.groomer || null)).catch(() => {});
     // Auto-fill from saved profile
     api.get("/profile").then((r) => {
       setForm((f) => ({
@@ -180,6 +183,7 @@ export default function BookNow() {
         upi_txn_ref: form.upi_txn_ref || null,
         notes: form.notes,
         referral_code: form.referral_code || null,
+        preferred_groomer_id: form.preferred_groomer_id || null,
         items: selectedServiceItems,
       };
       const r = await api.post("/bookings", payload);
@@ -239,6 +243,7 @@ export default function BookNow() {
               total={total}
               referralValidation={referralValidation}
               onValidateReferral={validateReferral}
+              lastGroomer={lastGroomer}
             />
           )}
 
@@ -667,9 +672,34 @@ function StepDateAddress({ form, setForm, slots }) {
   );
 }
 
-function StepPayment({ form, setForm, payInfo, total, referralValidation, onValidateReferral }) {
+function StepPayment({ form, setForm, payInfo, total, referralValidation, onValidateReferral, lastGroomer }) {
   return (
     <div>
+      {lastGroomer && (
+        <div
+          data-testid="preferred-groomer-block"
+          className="mb-6 rounded-2xl border border-[#1E3F2D]/20 bg-[#F1EBE1]/50 p-5"
+        >
+          <div className="text-xs uppercase tracking-[0.25em] text-[#5C7365] mb-1">Same groomer preference</div>
+          <div className="font-serif-display text-xl mb-3">Prefer {lastGroomer.name} again?</div>
+          <div className="text-sm text-[#5C7365] mb-3">
+            You&rsquo;ve worked with {lastGroomer.name} before. We&rsquo;ll try to allocate the same groomer subject to availability.
+          </div>
+          <label className="flex items-center gap-3 cursor-pointer text-sm">
+            <input
+              type="checkbox"
+              data-testid="prefer-same-groomer"
+              className="w-4 h-4 accent-[#1E3F2D]"
+              checked={form.preferred_groomer_id === lastGroomer.groomer_id}
+              onChange={(e) => setForm((f) => ({
+                ...f,
+                preferred_groomer_id: e.target.checked ? lastGroomer.groomer_id : null,
+              }))}
+            />
+            Yes, request {lastGroomer.name}
+          </label>
+        </div>
+      )}
       <RadioGroup
         className="grid sm:grid-cols-2 gap-4"
         value={form.payment_mode}

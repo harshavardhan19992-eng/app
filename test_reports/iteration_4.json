@@ -1,0 +1,43 @@
+{
+  "summary": "Iteration 4 backend testing for PawGroom Groomers module. Extended /app/backend/tests/backend_test.py with 21 new tests across 5 classes covering the entire groomers flow. TestAdminGroomersCRUD (8): create returns proper shape (grm_ id, active=true, snapshot fields), list/create/patch/delete all require admin JWT (401 without and with customer bearer), PATCH updates fields, PATCH {active:false} and DELETE both soft-delete, PATCH/DELETE on unknown id -> 404. TestPublicGroomers (2): GET /api/groomers returns only active groomers stripped of phone/notes; ?city=mumbai filters correctly. TestBookingPreferredGroomer (3): active groomer id -> preferred_groomer_id + name populated + assigned_* null; non-existent and inactive groomer ids silently ignored (fields remain null, booking still created). TestAdminAssignGroomer (5): PATCH /api/admin/bookings/{id}/assign sets assigned_groomer_id+name and is visible in /api/admin/bookings; unassign with {groomer_id:null} nulls both fields (verified via Mongo doc); nonexistent groomer_id -> 404, nonexistent booking -> 404; endpoint requires admin JWT (401 without & with customer token). TestLastGroomer (3): 401 without customer session; {groomer:null} when user has bookings but none assigned; after admin assigns, returns {groomer:{id,name,city}} then flips back to null when the groomer is deactivated. Full regression: all 92 tests pass in ~9.4s under pytest -n auto (71 pre-existing + 21 new). Admin password, UPI id, UPI payee, gst_percent all confirmed still at defaults after run (verified via curl login=200 and Mongo settings.gst_percent=18.0). All TEST_-prefixed groomers/users/sessions/bookings cleaned up in fixture teardowns (verified 0 leftovers in db.groomers, db.users, db.bookings).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/admin/groomers", "issue": "No validation that name is non-empty (empty string accepted). Consider constr(min_length=1) on GroomerCreate.name."},
+      {"endpoint": "POST /api/admin/groomers", "issue": "No validation on phone format (any string accepted). Consider a regex for 10-digit Indian numbers."},
+      {"endpoint": "GET /api/groomers", "issue": "city filter is an exact-match on the raw string; not normalised to lowercase, so ?city=Mumbai vs ?city=mumbai return different sets depending on how the groomer was created."},
+      {"endpoint": "GET /api/groomers", "issue": "No sort order specified — implicit insertion order. Prefer a stable sort (e.g., by name or created_at desc)."},
+      {"endpoint": "PATCH /api/admin/bookings/{id}/assign", "issue": "assigned_groomer_name is snapshotted at assign time and never refreshed if the groomer is later renamed. Documented behaviour but worth flagging for downstream reporting."},
+      {"endpoint": "GET /api/last-groomer", "issue": "Uses find_one with sort by created_at, but the `created_at` on booking never updates when the admin assigns a groomer later. If an old booking was assigned recently while a newer unassigned booking exists, last-groomer will still return the older assignment. Consider sorting by updated_at or by an explicit assigned_at timestamp."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Optional: tighten Pydantic validators on GroomerCreate (name min_length=1, phone regex).",
+    "Optional: normalise city to lower-case slug on groomer create/update so /api/groomers?city= filter is case-insensitive and consistent with CITY_CATALOG slugs.",
+    "Optional: refresh assigned_groomer_name on the booking when the underlying groomer is renamed (or resolve at read time).",
+    "Optional: /api/last-groomer should sort by updated_at (or an explicit assigned_at) rather than created_at so late assignments to older bookings don't shadow newer bookings.",
+    "Carry-over from iter 3: server.py is now ~1097 lines — split into modules (groomers module is a natural first cut).",
+    "Carry-over: migrate @app.on_event('startup'/'shutdown') to FastAPI lifespan API."
+  ],
+  "critical_code_review_comments": [
+    "assign_groomer endpoint accepts {groomer_id: null} to unassign, but BookingAssign has groomer_id: Optional[str] = None which means an empty PATCH body {} also 'unassigns' (falls into the else branch). Consider distinguishing 'field omitted' from 'field explicitly null' with a sentinel, or require groomer_id key to be present.",
+    "list_groomers_public projects {_id:0, notes:0, phone:0} but then re-projects to only {groomer_id, name, city}. The projection at the Mongo layer is fine; the second dict comprehension is redundant/dead work.",
+    "assign_groomer updates only assigned_* fields but does not clear preferred_groomer_id even when a *different* groomer is assigned. Preferred is the customer request; assigned is the outcome — keeping both is correct, but the frontend should render both distinctly.",
+    "GroomerCreate defaults phone/city/notes to empty strings; combined with no min_length, an admin can POST {'name':'x'} and create a groomer with 3 empty fields — allowed by design but worth a required-field UI on admin side.",
+    "server.py has grown to 1097 lines. Groomers is a self-contained module (~90 lines) — perfect first extract.",
+    "Booking assignment mutates only updated_at on the booking; no audit trail (who assigned, when, previous assignment). Consider a bookings.assignments[] history array for accountability."
+  ],
+  "updated_files": ["/app/backend/tests/backend_test.py"],
+  "success_rate": {"backend": "100% (92/92)", "frontend": "not tested (backend only per request)"},
+  "test_credentials": "Admin admin@pawgroom.in / Admin@123 (unchanged/restored). Customer sessions seeded in Mongo with TEST_ prefix; cleaned in fixture teardown.",
+  "seed_data_creation": "Ephemeral TEST_-prefixed groomers (via /api/admin/groomers), users, sessions, and bookings created per-test and torn down. gst_percent mutation in TestGstWithPriorityFee wrapped in try/finally back to 18. Verified 0 leftovers in db.groomers/db.users/db.bookings post-run.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend test suite is now 92 tests, ~9.4s under pytest -n auto. Iteration 4 helpers _make_groomer(s, admin_headers, ...) and _cleanup_groomer(gid) live near the bottom of backend_test.py after the iter-3 helpers. _iter3_payload now supports preferred_groomer_id via overrides. When adding new tests that create groomers, always wrap in try/finally with _cleanup_groomer. Groomer collection: db.groomers with pk groomer_id. On booking, preferred_groomer_id is silently normalised to null when the referenced groomer is missing/inactive — do NOT expect a 400. For last-groomer semantics, remember the query is 'most recent booking (by created_at) that has assigned_groomer_id != null AND groomer still active'. If iteration 5 adds an assigned_at field, /api/last-groomer sort order should switch to it.",
+  "rca of the issue": "N/A — no bugs found in iteration 4 groomers module. All acceptance criteria from the review request are satisfied by the current implementation."
+}

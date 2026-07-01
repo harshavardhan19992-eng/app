@@ -8,10 +8,14 @@ const STATUSES = ["pending", "confirmed", "in_service", "completed", "cancelled"
 
 export default function AdminBookings() {
   const [bookings, setBookings] = useState([]);
+  const [groomers, setGroomers] = useState([]);
   const [filter, setFilter] = useState("all");
 
   const load = () => adminApi.get("/admin/bookings").then((r) => setBookings(r.data));
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    adminApi.get("/admin/groomers").then((r) => setGroomers(r.data.filter((g) => g.active)));
+  }, []);
 
   const updateStatus = async (id, status) => {
     try {
@@ -20,6 +24,18 @@ export default function AdminBookings() {
       load();
     } catch {
       toast.error("Failed to update");
+    }
+  };
+
+  const assignGroomer = async (id, groomer_id) => {
+    try {
+      const r = await adminApi.patch(`/admin/bookings/${id}/assign`, {
+        groomer_id: groomer_id === "__none__" ? null : groomer_id,
+      });
+      toast.success(r.data.assigned_groomer_name ? `Assigned to ${r.data.assigned_groomer_name}` : "Unassigned");
+      load();
+    } catch {
+      toast.error("Assignment failed");
     }
   };
 
@@ -56,6 +72,7 @@ export default function AdminBookings() {
               <th className="text-left px-4 py-3">Address</th>
               <th className="text-right px-4 py-3">Total</th>
               <th className="text-left px-4 py-3">Payment</th>
+              <th className="text-left px-4 py-3">Groomer</th>
               <th className="text-left px-4 py-3">Status</th>
             </tr>
           </thead>
@@ -88,6 +105,25 @@ export default function AdminBookings() {
                   <div className="text-[#5C7365]">{b.payment_status}{b.upi_txn_ref ? ` · ${b.upi_txn_ref}` : ""}</div>
                 </td>
                 <td className="px-4 py-3">
+                  <Select
+                    value={b.assigned_groomer_id || "__none__"}
+                    onValueChange={(v) => assignGroomer(b.booking_id, v)}
+                  >
+                    <SelectTrigger data-testid={`assign-groomer-row-${b.booking_id}`} className="h-9 rounded-lg border-[#E5DFD3] bg-white w-40">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">— Unassigned —</SelectItem>
+                      {groomers.map((g) => (
+                        <SelectItem key={g.groomer_id} value={g.groomer_id}>{g.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {b.preferred_groomer_name && !b.assigned_groomer_id && (
+                    <div className="text-[10px] text-[#5C7365] mt-1">Prefers {b.preferred_groomer_name}</div>
+                  )}
+                </td>
+                <td className="px-4 py-3">
                   <Select value={b.status} onValueChange={(v) => updateStatus(b.booking_id, v)}>
                     <SelectTrigger data-testid={`admin-status-${b.booking_id}`} className="h-9 rounded-lg border-[#E5DFD3] bg-white w-40">
                       <SelectValue />
@@ -102,7 +138,7 @@ export default function AdminBookings() {
               </tr>
             ))}
             {shown.length === 0 && (
-              <tr><td colSpan={8} className="p-6 text-center text-[#5C7365]">No bookings.</td></tr>
+              <tr><td colSpan={9} className="p-6 text-center text-[#5C7365]">No bookings.</td></tr>
             )}
           </tbody>
         </table>

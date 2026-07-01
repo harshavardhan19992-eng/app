@@ -109,18 +109,19 @@ class BookingCreate(BaseModel):
     pincode: str
     state: Optional[str] = ""
     phone: str
-    property_type: Optional[str] = "apartment"  # apartment | house | villa | other
-    floor_info: Optional[str] = ""  # e.g. "5th floor, no lift"
-    access_instructions: Optional[str] = ""  # gate code, guard, doorbell
-    parking_type: Optional[str] = "street"  # available | street | none
-    utilities_confirmed: bool = False  # water & power available onsite
-    slot_date: str  # YYYY-MM-DD
-    slot_time: str  # e.g. "10:00"
+    property_type: Optional[str] = "apartment"
+    floor_info: Optional[str] = ""
+    access_instructions: Optional[str] = ""
+    parking_type: Optional[str] = "street"
+    utilities_confirmed: bool = False
+    slot_date: str
+    slot_time: str
     items: List[BookingItem]
-    payment_mode: str  # 'cash' | 'upi'
+    payment_mode: str
     upi_txn_ref: Optional[str] = None
     notes: Optional[str] = ""
     referral_code: Optional[str] = None
+    preferred_groomer_id: Optional[str] = None  # customer's request; admin can confirm/change
 
 
 class BookingStatusUpdate(BaseModel):
@@ -144,6 +145,25 @@ class ServiceUpdate(BaseModel):
     base_price: Optional[float] = None
     image_url: Optional[str] = None
     active: Optional[bool] = None
+
+
+class GroomerCreate(BaseModel):
+    name: str
+    phone: Optional[str] = ""
+    city: Optional[str] = ""
+    notes: Optional[str] = ""
+
+
+class GroomerUpdate(BaseModel):
+    name: Optional[str] = None
+    phone: Optional[str] = None
+    city: Optional[str] = None
+    notes: Optional[str] = None
+    active: Optional[bool] = None
+
+
+class BookingAssign(BaseModel):
+    groomer_id: Optional[str] = None  # null to unassign
 
 
 class AdminLogin(BaseModel):
@@ -411,6 +431,92 @@ async def delete_service(service_id: str, admin=Depends(get_current_admin)):
     return {"ok": True}
 
 
+# -------------------- Groomers (Admin) --------------------
+@api.get("/admin/groomers")
+async def list_groomers(admin=Depends(get_current_admin)):
+    docs = await db.groomers.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return docs
+
+
+@api.post("/admin/groomers")
+async def create_groomer(payload: GroomerCreate, admin=Depends(get_current_admin)):
+    doc = payload.model_dump()
+    doc["groomer_id"] = f"grm_{uuid.uuid4().hex[:10]}"
+    doc["active"] = True
+    doc["created_at"] = datetime.now(timezone.utc).isoformat()
+    await db.groomers.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api.patch("/admin/groomers/{groomer_id}")
+async def update_groomer(groomer_id: str, payload: GroomerUpdate, admin=Depends(get_current_admin)):
+    updates = {k: v for k, v in payload.model_dump().items() if v is not None}
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    res = await db.groomers.update_one({"groomer_id": groomer_id}, {"$set": updates})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Groomer not found")
+    doc = await db.groomers.find_one({"groomer_id": groomer_id}, {"_id": 0})
+    return doc
+
+
+@api.delete("/admin/groomers/{groomer_id}")
+async def deactivate_groomer(groomer_id: str, admin=Depends(get_current_admin)):
+    res = await db.groomers.update_one(
+        {"groomer_id": groomer_id}, {"$set": {"active": False}}
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Groomer not found")
+    return {"ok": True}
+
+
+@api.patch("/admin/bookings/{booking_id}/assign")
+async def assign_groomer(booking_id: str, payload: BookingAssign, admin=Depends(get_current_admin)):
+    b = await db.bookings.find_one({"booking_id": booking_id}, {"_id": 0})
+    if not b:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    updates = {"updated_at": datetime.now(timezone.utc).isoformat()}
+    if payload.groomer_id:
+        g = await db.groomers.find_one({"groomer_id": payload.groomer_id}, {"_id": 0})
+        if not g:
+            raise HTTPException(status_code=404, detail="Groomer not found")
+        updates["assigned_groomer_id"] = g["groomer_id"]
+        updates["assigned_groomer_name"] = g["name"]
+    else:
+        updates["assigned_groomer_id"] = None
+        updates["assigned_groomer_name"] = None
+    await db.bookings.update_one({"booking_id": booking_id}, {"$set": updates})
+    return {"ok": True, "assigned_groomer_id": updates.get("assigned_groomer_id"),
+            "assigned_groomer_name": updates.get("assigned_groomer_name")}
+
+
+# Customer-facing: fetch last groomer used (for "same groomer" preference)
+@api.get("/last-groomer")
+async def my_last_groomer(user: User = Depends(get_current_user)):
+    last = await db.bookings.find_one(
+        {"user_id": user.user_id, "assigned_groomer_id": {"$ne": None}},
+        {"_id": 0},
+        sort=[("created_at", -1)],
+    )
+    if not last:
+        return {"groomer": None}
+    g = await db.groomers.find_one({"groomer_id": last["assigned_groomer_id"], "active": True}, {"_id": 0})
+    if not g:
+        return {"groomer": None}
+    return {"groomer": {"groomer_id": g["groomer_id"], "name": g["name"], "city": g.get("city", "")}}
+
+
+# Public list of active groomers by city (used by customer booking flow)
+@api.get("/groomers")
+async def list_groomers_public(city: Optional[str] = None):
+    q = {"active": True}
+    if city:
+        q["city"] = city
+    docs = await db.groomers.find(q, {"_id": 0, "notes": 0, "phone": 0}).to_list(200)
+    return [{"groomer_id": d["groomer_id"], "name": d["name"], "city": d.get("city", "")} for d in docs]
+
+
 # -------------------- Bookings --------------------
 def _city_by_slug(slug: str):
     return next((c for c in CITY_CATALOG if c["slug"] == slug), None)
@@ -529,6 +635,17 @@ async def create_booking(payload: BookingCreate, user: User = Depends(get_curren
         }},
     )
 
+    # Resolve preferred groomer (customer request) — admin may confirm later
+    preferred_groomer_id = None
+    preferred_groomer_name = None
+    if payload.preferred_groomer_id:
+        g = await db.groomers.find_one(
+            {"groomer_id": payload.preferred_groomer_id, "active": True}, {"_id": 0}
+        )
+        if g:
+            preferred_groomer_id = g["groomer_id"]
+            preferred_groomer_name = g["name"]
+
     booking_id = f"bkg_{uuid.uuid4().hex[:10]}"
     invoice_no = f"INV-{datetime.now(timezone.utc).strftime('%y%m')}-{uuid.uuid4().hex[:5].upper()}"
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -570,6 +687,10 @@ async def create_booking(payload: BookingCreate, user: User = Depends(get_curren
         "payment_status": "paid" if payload.payment_mode == "upi" and payload.upi_txn_ref else "pending",
         "upi_txn_ref": payload.upi_txn_ref,
         "notes": payload.notes,
+        "preferred_groomer_id": preferred_groomer_id,
+        "preferred_groomer_name": preferred_groomer_name,
+        "assigned_groomer_id": None,
+        "assigned_groomer_name": None,
         "status": "pending",
         "created_at": now_iso,
         "updated_at": now_iso,

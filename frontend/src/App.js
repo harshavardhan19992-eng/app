@@ -19,6 +19,7 @@ import AdminDashboard from "@/pages/AdminDashboard";
 import AdminBookings from "@/pages/AdminBookings";
 import AdminServices from "@/pages/AdminServices";
 import AdminCustomers from "@/pages/AdminCustomers";
+import AdminGroomers from "@/pages/AdminGroomers";
 import AdminSettings from "@/pages/AdminSettings";
 
 function AppRouter() {
@@ -35,11 +36,15 @@ function AppRouter() {
         <Route path="/login" element={<CustomerLogin />} />
         <Route path="/dashboard" element={<CustomerDashboard />} />
         <Route path="/book" element={<BookNow />} />
+        <Route path="/profile" element={<Profile />} />
         <Route path="/admin/login" element={<AdminLogin />} />
         <Route path="/admin" element={<AdminShell />}>
           <Route path="dashboard" element={<AdminDashboard />} />
           <Route path="bookings" element={<AdminBookings />} />
+          <Route path="customers" element={<AdminCustomers />} />
+          <Route path="groomers" element={<AdminGroomers />} />
           <Route path="services" element={<AdminServices />} />
+          <Route path="settings" element={<AdminSettings />} />
         </Route>
       </Routes>
       <Footer />

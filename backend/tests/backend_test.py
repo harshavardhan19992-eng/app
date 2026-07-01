@@ -1090,3 +1090,311 @@ class TestGstWithPriorityFee:
             _cleanup(uid)
             # restore gst
             s.patch(f"{API}/admin/settings", json={"gst_percent": 18}, headers=admin_headers)
+
+
+
+# ==================== Iteration 4: Groomers ====================
+def _make_groomer(s, admin_headers, name=None, city="bangalore", phone="9000000000", notes="TEST notes"):
+    body = {"name": name or f"TEST_G_{uuid.uuid4().hex[:6]}", "phone": phone, "city": city, "notes": notes}
+    r = s.post(f"{API}/admin/groomers", json=body, headers=admin_headers)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _cleanup_groomer(gid):
+    db.groomers.delete_many({"groomer_id": gid})
+
+
+class TestAdminGroomersCRUD:
+    """Admin CRUD for /api/admin/groomers."""
+
+    def test_create_groomer_returns_shape(self, s, admin_headers):
+        g = _make_groomer(s, admin_headers, name=f"TEST_Priya_{uuid.uuid4().hex[:5]}")
+        try:
+            assert g["groomer_id"].startswith("grm_")
+            assert g["active"] is True
+            assert g["name"].startswith("TEST_Priya_")
+            assert g["phone"] == "9000000000"
+            assert g["city"] == "bangalore"
+            assert g["notes"] == "TEST notes"
+            assert "created_at" in g
+            # Persistence: shows in list
+            lst = s.get(f"{API}/admin/groomers", headers=admin_headers)
+            assert lst.status_code == 200
+            assert any(x["groomer_id"] == g["groomer_id"] for x in lst.json())
+        finally:
+            _cleanup_groomer(g["groomer_id"])
+
+    def test_list_requires_admin(self, s, user_headers):
+        r = s.get(f"{API}/admin/groomers")
+        assert r.status_code == 401
+        r2 = s.get(f"{API}/admin/groomers", headers=user_headers)
+        # customer token is not a valid admin JWT -> 401
+        assert r2.status_code == 401
+
+    def test_create_requires_admin(self, s, user_headers):
+        body = {"name": "TEST_x", "phone": "9", "city": "mumbai"}
+        r = s.post(f"{API}/admin/groomers", json=body)
+        assert r.status_code == 401
+        r2 = s.post(f"{API}/admin/groomers", json=body, headers=user_headers)
+        assert r2.status_code == 401
+
+    def test_patch_updates_fields(self, s, admin_headers):
+        g = _make_groomer(s, admin_headers)
+        try:
+            r = s.patch(f"{API}/admin/groomers/{g['groomer_id']}",
+                        json={"name": "TEST_Renamed", "city": "mumbai"},
+                        headers=admin_headers)
+            assert r.status_code == 200
+            d = r.json()
+            assert d["name"] == "TEST_Renamed"
+            assert d["city"] == "mumbai"
+            assert d["active"] is True
+        finally:
+            _cleanup_groomer(g["groomer_id"])
+
+    def test_patch_soft_deletes_via_active_false(self, s, admin_headers):
+        g = _make_groomer(s, admin_headers)
+        try:
+            r = s.patch(f"{API}/admin/groomers/{g['groomer_id']}",
+                        json={"active": False}, headers=admin_headers)
+            assert r.status_code == 200
+            assert r.json()["active"] is False
+        finally:
+            _cleanup_groomer(g["groomer_id"])
+
+    def test_delete_soft_deletes(self, s, admin_headers):
+        g = _make_groomer(s, admin_headers)
+        try:
+            r = s.delete(f"{API}/admin/groomers/{g['groomer_id']}", headers=admin_headers)
+            assert r.status_code == 200
+            doc = db.groomers.find_one({"groomer_id": g["groomer_id"]}, {"_id": 0})
+            assert doc is not None and doc["active"] is False
+        finally:
+            _cleanup_groomer(g["groomer_id"])
+
+    def test_patch_nonexistent_returns_404(self, s, admin_headers):
+        r = s.patch(f"{API}/admin/groomers/grm_doesnotexist",
+                    json={"name": "TEST"}, headers=admin_headers)
+        assert r.status_code == 404
+
+    def test_delete_nonexistent_returns_404(self, s, admin_headers):
+        r = s.delete(f"{API}/admin/groomers/grm_doesnotexist", headers=admin_headers)
+        assert r.status_code == 404
+
+
+class TestPublicGroomers:
+    """GET /api/groomers is public and filters/redacts."""
+
+    def test_only_active_shown_no_sensitive_fields(self, s, admin_headers):
+        g_active = _make_groomer(s, admin_headers, city="mumbai", phone="9999911111", notes="secret")
+        g_inactive = _make_groomer(s, admin_headers, city="mumbai")
+        s.patch(f"{API}/admin/groomers/{g_inactive['groomer_id']}",
+                json={"active": False}, headers=admin_headers)
+        try:
+            r = s.get(f"{API}/groomers")
+            assert r.status_code == 200
+            items = r.json()
+            ids = [x["groomer_id"] for x in items]
+            assert g_active["groomer_id"] in ids
+            assert g_inactive["groomer_id"] not in ids
+            # limited fields — no phone, no notes
+            for x in items:
+                assert "phone" not in x
+                assert "notes" not in x
+                assert set(x.keys()) <= {"groomer_id", "name", "city"}
+        finally:
+            _cleanup_groomer(g_active["groomer_id"])
+            _cleanup_groomer(g_inactive["groomer_id"])
+
+    def test_filter_by_city(self, s, admin_headers):
+        g_mum = _make_groomer(s, admin_headers, city="mumbai")
+        g_del = _make_groomer(s, admin_headers, city="delhi")
+        try:
+            r = s.get(f"{API}/groomers", params={"city": "mumbai"})
+            assert r.status_code == 200
+            ids = [x["groomer_id"] for x in r.json()]
+            assert g_mum["groomer_id"] in ids
+            assert g_del["groomer_id"] not in ids
+        finally:
+            _cleanup_groomer(g_mum["groomer_id"])
+            _cleanup_groomer(g_del["groomer_id"])
+
+
+class TestBookingPreferredGroomer:
+    """BookingCreate.preferred_groomer_id — snapshot name if active groomer, else silently ignored."""
+
+    def test_preferred_active_groomer_snapshot(self, s, admin_headers):
+        g = _make_groomer(s, admin_headers, name=f"TEST_Pref_{uuid.uuid4().hex[:5]}")
+        uid, tok = _fresh_customer()
+        h = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
+        try:
+            payload = _iter3_payload(preferred_groomer_id=g["groomer_id"])
+            r = s.post(f"{API}/bookings", json=payload, headers=h)
+            assert r.status_code == 200, r.text
+            b = r.json()
+            assert b["preferred_groomer_id"] == g["groomer_id"]
+            assert b["preferred_groomer_name"] == g["name"]
+            assert b["assigned_groomer_id"] is None
+            assert b["assigned_groomer_name"] is None
+        finally:
+            _cleanup(uid)
+            _cleanup_groomer(g["groomer_id"])
+
+    def test_preferred_nonexistent_silently_ignored(self, s):
+        uid, tok = _fresh_customer()
+        h = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
+        try:
+            payload = _iter3_payload(preferred_groomer_id="grm_doesnotexist")
+            r = s.post(f"{API}/bookings", json=payload, headers=h)
+            assert r.status_code == 200, r.text
+            b = r.json()
+            assert b["preferred_groomer_id"] is None
+            assert b["preferred_groomer_name"] is None
+        finally:
+            _cleanup(uid)
+
+    def test_preferred_inactive_silently_ignored(self, s, admin_headers):
+        g = _make_groomer(s, admin_headers)
+        s.patch(f"{API}/admin/groomers/{g['groomer_id']}",
+                json={"active": False}, headers=admin_headers)
+        uid, tok = _fresh_customer()
+        h = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
+        try:
+            payload = _iter3_payload(preferred_groomer_id=g["groomer_id"])
+            r = s.post(f"{API}/bookings", json=payload, headers=h)
+            assert r.status_code == 200
+            b = r.json()
+            assert b["preferred_groomer_id"] is None
+            assert b["preferred_groomer_name"] is None
+        finally:
+            _cleanup(uid)
+            _cleanup_groomer(g["groomer_id"])
+
+
+class TestAdminAssignGroomer:
+    """PATCH /api/admin/bookings/{id}/assign."""
+
+    def test_assign_sets_fields_and_appears_in_admin_list(self, s, admin_headers):
+        g = _make_groomer(s, admin_headers, name=f"TEST_Assign_{uuid.uuid4().hex[:5]}")
+        uid, tok = _fresh_customer()
+        h = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
+        try:
+            r = s.post(f"{API}/bookings", json=_iter3_payload(), headers=h)
+            assert r.status_code == 200
+            bid = r.json()["booking_id"]
+
+            r2 = s.patch(f"{API}/admin/bookings/{bid}/assign",
+                         json={"groomer_id": g["groomer_id"]}, headers=admin_headers)
+            assert r2.status_code == 200
+            assert r2.json()["assigned_groomer_id"] == g["groomer_id"]
+            assert r2.json()["assigned_groomer_name"] == g["name"]
+
+            # Visible in admin bookings list
+            admin_list = s.get(f"{API}/admin/bookings", headers=admin_headers).json()
+            match = next(x for x in admin_list if x["booking_id"] == bid)
+            assert match["assigned_groomer_id"] == g["groomer_id"]
+            assert match["assigned_groomer_name"] == g["name"]
+        finally:
+            _cleanup(uid)
+            _cleanup_groomer(g["groomer_id"])
+
+    def test_unassign_sets_null(self, s, admin_headers):
+        g = _make_groomer(s, admin_headers)
+        uid, tok = _fresh_customer()
+        h = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
+        try:
+            r = s.post(f"{API}/bookings", json=_iter3_payload(), headers=h)
+            bid = r.json()["booking_id"]
+            s.patch(f"{API}/admin/bookings/{bid}/assign",
+                    json={"groomer_id": g["groomer_id"]}, headers=admin_headers)
+
+            r2 = s.patch(f"{API}/admin/bookings/{bid}/assign",
+                         json={"groomer_id": None}, headers=admin_headers)
+            assert r2.status_code == 200
+            assert r2.json()["assigned_groomer_id"] is None
+            assert r2.json()["assigned_groomer_name"] is None
+
+            doc = db.bookings.find_one({"booking_id": bid}, {"_id": 0})
+            assert doc["assigned_groomer_id"] is None
+            assert doc["assigned_groomer_name"] is None
+        finally:
+            _cleanup(uid)
+            _cleanup_groomer(g["groomer_id"])
+
+    def test_assign_nonexistent_groomer_404(self, s, admin_headers):
+        uid, tok = _fresh_customer()
+        h = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
+        try:
+            r = s.post(f"{API}/bookings", json=_iter3_payload(), headers=h)
+            bid = r.json()["booking_id"]
+            r2 = s.patch(f"{API}/admin/bookings/{bid}/assign",
+                         json={"groomer_id": "grm_nope"}, headers=admin_headers)
+            assert r2.status_code == 404
+        finally:
+            _cleanup(uid)
+
+    def test_assign_nonexistent_booking_404(self, s, admin_headers):
+        g = _make_groomer(s, admin_headers)
+        try:
+            r = s.patch(f"{API}/admin/bookings/bkg_nope/assign",
+                        json={"groomer_id": g["groomer_id"]}, headers=admin_headers)
+            assert r.status_code == 404
+        finally:
+            _cleanup_groomer(g["groomer_id"])
+
+    def test_assign_requires_admin(self, s, user_headers):
+        r = s.patch(f"{API}/admin/bookings/anything/assign", json={"groomer_id": None})
+        assert r.status_code == 401
+        r2 = s.patch(f"{API}/admin/bookings/anything/assign",
+                     json={"groomer_id": None}, headers=user_headers)
+        assert r2.status_code == 401
+
+
+class TestLastGroomer:
+    """GET /api/last-groomer customer-facing."""
+
+    def test_requires_customer_session(self, s):
+        r = s.get(f"{API}/last-groomer")
+        assert r.status_code == 401
+
+    def test_no_assigned_returns_null(self, s):
+        uid, tok = _fresh_customer()
+        h = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
+        try:
+            # even with a booking but no assignment
+            s.post(f"{API}/bookings", json=_iter3_payload(), headers=h)
+            r = s.get(f"{API}/last-groomer", headers=h)
+            assert r.status_code == 200
+            assert r.json() == {"groomer": None}
+        finally:
+            _cleanup(uid)
+
+    def test_returns_assigned_active_groomer(self, s, admin_headers):
+        g = _make_groomer(s, admin_headers,
+                          name=f"TEST_Last_{uuid.uuid4().hex[:5]}", city="mumbai")
+        uid, tok = _fresh_customer()
+        h = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
+        try:
+            r = s.post(f"{API}/bookings", json=_iter3_payload(), headers=h)
+            bid = r.json()["booking_id"]
+            s.patch(f"{API}/admin/bookings/{bid}/assign",
+                    json={"groomer_id": g["groomer_id"]}, headers=admin_headers)
+
+            r2 = s.get(f"{API}/last-groomer", headers=h)
+            assert r2.status_code == 200
+            data = r2.json()
+            assert data["groomer"] is not None
+            assert data["groomer"]["groomer_id"] == g["groomer_id"]
+            assert data["groomer"]["name"] == g["name"]
+            assert data["groomer"]["city"] == "mumbai"
+
+            # Deactivating the groomer -> null
+            s.patch(f"{API}/admin/groomers/{g['groomer_id']}",
+                    json={"active": False}, headers=admin_headers)
+            r3 = s.get(f"{API}/last-groomer", headers=h)
+            assert r3.status_code == 200
+            assert r3.json() == {"groomer": None}
+        finally:
+            _cleanup(uid)
+            _cleanup_groomer(g["groomer_id"])

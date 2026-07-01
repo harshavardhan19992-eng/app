@@ -3,17 +3,39 @@ import { Link } from "react-router-dom";
 import { adminApi } from "@/lib/api";
 import { formatINR, STATUS_LABEL, STATUS_COLOR, cn } from "@/lib/utils";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { CalendarCheck2, Users, IndianRupee, Hourglass, Phone, MapPin, Mail, PawPrint, Zap, Gift, ArrowRight } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { CalendarCheck2, Users, IndianRupee, Hourglass, Phone, MapPin, Mail, PawPrint, Zap, Gift, ArrowRight, UserCog } from "lucide-react";
+import { toast } from "sonner";
 
 export default function AdminDashboard() {
   const [stats, setStats] = useState(null);
   const [recent, setRecent] = useState([]);
   const [selected, setSelected] = useState(null);
+  const [groomers, setGroomers] = useState([]);
 
-  useEffect(() => {
+  const loadAll = () => {
     adminApi.get("/admin/stats").then((r) => setStats(r.data));
     adminApi.get("/admin/bookings").then((r) => setRecent(r.data.slice(0, 8)));
-  }, []);
+    adminApi.get("/admin/groomers").then((r) => setGroomers(r.data.filter((g) => g.active)));
+  };
+
+  useEffect(() => { loadAll(); }, []);
+
+  const assignGroomer = async (booking_id, groomer_id) => {
+    try {
+      const r = await adminApi.patch(`/admin/bookings/${booking_id}/assign`, {
+        groomer_id: groomer_id === "__none__" ? null : groomer_id,
+      });
+      toast.success(r.data.assigned_groomer_name ? `Assigned to ${r.data.assigned_groomer_name}` : "Groomer unassigned");
+      // reload booking data
+      const bs = await adminApi.get("/admin/bookings");
+      setRecent(bs.data.slice(0, 8));
+      const updated = bs.data.find((b) => b.booking_id === booking_id);
+      if (updated) setSelected(updated);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Assignment failed");
+    }
+  };
 
   const cards = [
     { icon: CalendarCheck2, label: "Total bookings", value: stats?.total_bookings ?? "—" },
@@ -112,6 +134,16 @@ export default function AdminDashboard() {
                     <span key={i} className="pill text-xs">{it.service_name}</span>
                   ))}
                   {b.items.length > 3 && <span className="pill text-xs">+{b.items.length - 3} more</span>}
+                </div>
+                <div className="mt-3 flex items-center gap-1.5 text-xs text-[#5C7365]">
+                  <UserCog className="w-3 h-3" strokeWidth={1.75}/>
+                  {b.assigned_groomer_name ? (
+                    <span className="text-[#1E3F2D]">Assigned to <b>{b.assigned_groomer_name}</b></span>
+                  ) : b.preferred_groomer_name ? (
+                    <span>Prefers {b.preferred_groomer_name} · not yet assigned</span>
+                  ) : (
+                    <span className="italic">No groomer assigned</span>
+                  )}
                 </div>
               </button>
             ))}
@@ -229,6 +261,40 @@ export default function AdminDashboard() {
                 Payment: <span className="text-[#1E3F2D] font-medium uppercase">{selected.payment_mode}</span> · {selected.payment_status}
                 {selected.upi_txn_ref ? ` · ${selected.upi_txn_ref}` : ""}
               </div>
+
+              {/* Groomer assignment */}
+              <div className="mt-4 rounded-xl border border-[#E5DFD3] p-4 bg-white">
+                <div className="text-xs uppercase tracking-widest text-[#5C7365] mb-2 flex items-center gap-1.5">
+                  <UserCog className="w-3.5 h-3.5" strokeWidth={1.75}/> Groomer assignment
+                </div>
+                {selected.preferred_groomer_name && (
+                  <div className="text-xs text-[#5C7365] mb-2">
+                    Customer prefers: <span className="text-[#1E3F2D] font-medium">{selected.preferred_groomer_name}</span>
+                  </div>
+                )}
+                <Select
+                  value={selected.assigned_groomer_id || "__none__"}
+                  onValueChange={(v) => assignGroomer(selected.booking_id, v)}
+                >
+                  <SelectTrigger data-testid={`assign-groomer-${selected.booking_id}`} className="rounded-xl border-[#E5DFD3] h-11">
+                    <SelectValue placeholder="Assign a groomer" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">— Unassigned —</SelectItem>
+                    {groomers.map((g) => (
+                      <SelectItem key={g.groomer_id} value={g.groomer_id}>
+                        {g.name}{g.city ? ` · ${g.city}` : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {groomers.length === 0 && (
+                  <div className="text-xs text-[#5C7365] mt-2">
+                    No active groomers. <Link to="/admin/groomers" className="underline">Add one first</Link>.
+                  </div>
+                )}
+              </div>
+
               {selected.notes && (
                 <div className="mt-3 rounded-xl bg-[#F1EBE1] p-3 text-sm">
                   <div className="text-xs uppercase tracking-widest text-[#5C7365] mb-1">Notes</div>

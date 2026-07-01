@@ -4,7 +4,7 @@ import { api, downloadFile } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { formatINR, STATUS_COLOR, STATUS_LABEL, cn } from "@/lib/utils";
-import { Calendar, MapPin, Download, PawPrint, ArrowRight, Receipt, Gift, Copy, Check } from "lucide-react";
+import { Calendar, MapPin, Download, PawPrint, ArrowRight, Receipt, Gift, Copy, Check, UserCog } from "lucide-react";
 import { toast } from "sonner";
 
 export default function CustomerDashboard() {
@@ -204,6 +204,16 @@ function BookingCard({ b, onDownload }) {
           <span key={i} className="pill">{it.service_name}</span>
         ))}
       </div>
+      {(b.assigned_groomer_name || b.preferred_groomer_name) && (
+        <div className="mt-3 text-xs text-[#5C7365] flex items-center gap-1.5">
+          <UserCog className="w-3.5 h-3.5" strokeWidth={1.75}/>
+          {b.assigned_groomer_name ? (
+            <>Groomer: <span className="text-[#1E3F2D] font-medium">{b.assigned_groomer_name}</span></>
+          ) : (
+            <>Requested: {b.preferred_groomer_name} (subject to availability)</>
+          )}
+        </div>
+      )}
       <div className="mt-5 flex items-center justify-between">
         <div className="text-xs text-[#5C7365]">
           Payment: <span className="text-[#1E3F2D] font-medium">{b.payment_mode.toUpperCase()}</span> • {b.payment_status}
