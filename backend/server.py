@@ -41,6 +41,11 @@ db = client[DB_NAME]
 app = FastAPI(title="PawGroom API")
 api = APIRouter(prefix="/api")
 
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("pawgroom")
 

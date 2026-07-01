@@ -416,3 +416,97 @@ class TestAdminBookings:
     def test_admin_bookings_unauth(self, s):
         r = s.get(f"{API}/admin/bookings")
         assert r.status_code == 401
+
+
+
+# ---------- Health probe (Kubernetes liveness/readiness) ----------
+# /health is a top-level FastAPI route (outside /api). K8s hits it via pod
+# loopback (http://<pod>:8001/health), so we test it against the backend
+# port directly rather than through the ingress (which only routes /api/*).
+class TestHealth:
+    """Kubernetes probe endpoint — must return 200 + {'status':'ok'} on backend port."""
+
+    HEALTH_URL = "http://localhost:8001/health"
+
+    def test_health_returns_200_ok(self, s):
+        r = s.get(self.HEALTH_URL, timeout=5)
+        assert r.status_code == 200, f"expected 200, got {r.status_code}: {r.text}"
+        data = r.json()
+        assert data == {"status": "ok"}, f"unexpected body: {data}"
+
+    def test_health_is_json(self, s):
+        r = s.get(self.HEALTH_URL, timeout=5)
+        assert r.status_code == 200
+        assert "application/json" in r.headers.get("content-type", "").lower()
+
+
+# ---------- Referral endpoints (require customer session) ----------
+class TestReferral:
+    """/api/referral (my code + stats) and /api/referral/validate/{code}."""
+
+    def test_referral_requires_auth(self, s):
+        r = s.get(f"{API}/referral")
+        assert r.status_code == 401
+
+    def test_my_referral(self, s, user_headers, seeded_user):
+        r = s.get(f"{API}/referral", headers=user_headers)
+        assert r.status_code == 200, r.text
+        data = r.json()
+        # returns referral_code, referral_count, referral_credit_inr
+        assert "referral_code" in data
+        assert isinstance(data["referral_code"], str) and data["referral_code"].startswith("PG-")
+        assert data.get("referral_count", 0) == 0
+        assert data.get("referral_credit_inr", 0) == 0
+        # persistence check: subsequent call returns same code
+        r2 = s.get(f"{API}/referral", headers=user_headers)
+        assert r2.json()["referral_code"] == data["referral_code"]
+
+    def test_validate_referral_valid_other_user_code(self, s, second_user):
+        # Seed a brand-new user (no bookings yet) — referral is only valid on
+        # the *first* booking, so we can't reuse seeded_user which has bookings.
+        fresh_id = f"user_TEST_{uuid.uuid4().hex[:8]}"
+        fresh_token = f"sess_TEST_{uuid.uuid4().hex}"
+        db.users.insert_one({
+            "user_id": fresh_id, "email": f"TEST_{fresh_id}@ex.com", "name": "Fresh",
+            "picture": None,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        db.user_sessions.insert_one({
+            "user_id": fresh_id, "session_token": fresh_token,
+            "expires_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        fresh_headers = {"Authorization": f"Bearer {fresh_token}", "Content-Type": "application/json"}
+        try:
+            # get second user's referral code first
+            second_headers = {"Authorization": f"Bearer {second_user['token']}", "Content-Type": "application/json"}
+            r_other = s.get(f"{API}/referral", headers=second_headers)
+            assert r_other.status_code == 200
+            other_code = r_other.json()["referral_code"]
+
+            # validate as fresh user (no bookings yet) — should be valid
+            r = s.get(f"{API}/referral/validate/{other_code}", headers=fresh_headers)
+            assert r.status_code == 200, r.text
+            data = r.json()
+            assert data.get("valid") is True, f"expected valid True, got: {data}"
+        finally:
+            db.user_sessions.delete_many({"user_id": fresh_id})
+            db.users.delete_many({"user_id": fresh_id})
+            db.bookings.delete_many({"user_id": fresh_id})
+
+    def test_validate_referral_own_code_invalid(self, s, user_headers):
+        r = s.get(f"{API}/referral", headers=user_headers)
+        my_code = r.json()["referral_code"]
+        r2 = s.get(f"{API}/referral/validate/{my_code}", headers=user_headers)
+        # own code should not be valid — either 400 or {"valid": False}
+        if r2.status_code == 200:
+            assert r2.json().get("valid") is False
+        else:
+            assert r2.status_code in (400, 403)
+
+    def test_validate_referral_bad_code(self, s, user_headers):
+        r = s.get(f"{API}/referral/validate/PG-DOESNOTEXIST", headers=user_headers)
+        if r.status_code == 200:
+            assert r.json().get("valid") is False
+        else:
+            assert r.status_code in (400, 404)
