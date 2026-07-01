@@ -1,0 +1,87 @@
+{
+  "theme": "LIGHT",
+  "archetype": "1_Organic_Earthy",
+  "vibe": "Premium boutique wellness for pets. Warm, trustworthy, high-end editorial feel.",
+  "colors": {
+    "background": "#FDFBF7",
+    "surface": "#F1EBE1",
+    "primary": "#1E3F2D",
+    "secondary": "#D96C4A",
+    "text_main": "#1E3F2D",
+    "text_muted": "#5C7365",
+    "border": "#E5DFD3",
+    "status_success": "#2A6E46",
+    "status_pending": "#C6823F"
+  },
+  "typography": {
+    "headings": {
+      "family": "Cormorant Garamond",
+      "weights": ["400", "600", "700"],
+      "style_notes": "Use tracking-tight for H1/H2. Elegance over raw power. Never use Inter or Roboto."
+    },
+    "body": {
+      "family": "Outfit",
+      "weights": ["300", "400", "500", "600"],
+      "style_notes": "Clean geometric legibility to balance the serif headings."
+    }
+  },
+  "layout_spacing": {
+    "marketing": "Mode A 'Tetris' grid. Generous padding (p-16 to p-32). Asymmetrical blocks for services.",
+    "dashboard": "Mode B 'Control Room' grid. Dense but bordered (p-6 to p-8). Flat cards with 1px borders.",
+    "corner_radius": "rounded-3xl for main containers/images, rounded-full for buttons/badges.",
+    "general": "Never center-everything by default. Use left-alignment for dense content and forms. Use optical alignment for buttons with icons."
+  },
+  "components": {
+    "buttons": "Flat background. Primary (#1E3F2D) for main actions, Secondary (#D96C4A) for highlights (Book Now). No heavy shadows. Hover: slight translateY and color tint. Include data-testid.",
+    "cards": "Surface color (#F1EBE1) with 1px border (#E5DFD3) and zero shadow. Inside padding p-6 or p-8.",
+    "inputs": "Shadcn standard but override radius to rounded-xl, background to #FDFBF7, border to #E5DFD3. Must have focus states (ring-primary).",
+    "navigation": "Crystal glassmorphism (backdrop-blur-xl bg-[#FDFBF7]/80) for sticky headers. 1px bottom border (#E5DFD3).",
+    "google_login": "Custom styled button, #FDFBF7 background, 1px border, Outfit font, Google G icon.",
+    "pdf_invoice": "Clean, tabular format using pure HTML/CSS optimized for printing. High contrast, serif headers for the brand name, minimal borders."
+  },
+  "icons_and_assets": {
+    "icons_library": "lucide-react",
+    "style": "Use stroke-width 1.5 for elegance. Avoid filled icons."
+  },
+  "media": {
+    "images": [
+      {
+        "url": "https://images.unsplash.com/photo-1509205477838-a534e43a849f?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Nzh8MHwxfHNlYXJjaHwyfHxkb2clMjBjYXQlMjBncm9vbWluZ3xlbnwwfHx8fDE3ODI2NzQ5NjN8MA&ixlib=rb-4.1.0&q=85",
+        "category": "hero",
+        "description": "Dog and cat looking relaxed. Use for main landing hero."
+      },
+      {
+        "url": "https://images.pexels.com/photos/12721119/pexels-photo-12721119.jpeg",
+        "category": "service_premium",
+        "description": "Premium dog profile for 'Deluxe Spa' package."
+      },
+      {
+        "url": "https://images.pexels.com/photos/37304670/pexels-photo-37304670.jpeg",
+        "category": "service_basic",
+        "description": "Poodle in sweater for 'Full Grooming' package."
+      },
+      {
+        "url": "https://images.pexels.com/photos/37022013/pexels-photo-37022013.jpeg",
+        "category": "cat_service",
+        "description": "Yawning calico cat for 'Cat Grooming' package."
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1563460716037-460a3ad24ba9?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Nzh8MHwxfHNlYXJjaHwxfHxkb2clMjBjYXQlMjBncm9vbWluZ3xlbnwwfHx8fDE3ODI2NzQ5NjN8MA&ixlib=rb-4.1.0&q=85",
+        "category": "testimonials",
+        "description": "White and brown puppy for testimonial / about section."
+      }
+    ],
+    "overlay_rules": "Never use opaque black overlays. If overlay needed, use bg-white/20 to bg-white/40 for light theme or soft gradient."
+  },
+  "testing": {
+    "requirements": "All interactive and key informational elements MUST include a data-testid attribute. Use kebab-case and role-based naming (e.g., data-testid='login-submit-button', data-testid='service-package-card')."
+  },
+  "instructions_to_main_agent": [
+    "Ensure 'Cormorant Garamond' and 'Outfit' are imported via Google Fonts in index.html.",
+    "Do NOT use HTML <input type='date'> for the booking flow; use Shadcn Calendar.",
+    "Do NOT use raw <select>; use Shadcn Select/Dropdown.",
+    "Build the dashboard components without heavy Shadcn 'Card' wrappers if they add unwanted default box-shadows. Strip shadows and use border/bg colors specified.",
+    "For the PDF invoice, render a visually clean DOM element and use browser print or a lightweight client-side PDF generator (like html2pdf.js) if necessary.",
+    "Ensure all user flows (login, book, dashboard) are seamlessly connected with React Router."
+  ]
+}
