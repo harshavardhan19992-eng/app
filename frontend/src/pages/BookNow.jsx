@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Calendar as CalendarUI } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { formatINR, cn } from "@/lib/utils";
-import { PawPrint, Calendar as CalIcon, MapPin, ShoppingBag, Wallet, IndianRupee, Check, ArrowRight, ArrowLeft } from "lucide-react";
+import { PawPrint, Calendar as CalIcon, MapPin, ShoppingBag, Wallet, IndianRupee, Check, ArrowRight, ArrowLeft, Zap } from "lucide-react";
 import { format } from "date-fns";
 import { toast } from "sonner";
 
@@ -36,8 +36,16 @@ export default function BookNow() {
     pet_type: "dog",
     address_line1: "",
     address_line2: "",
+    locality: "",
+    landmark: "",
     pincode: "",
+    state: "",
     phone: "",
+    property_type: "apartment",
+    floor_info: "",
+    access_instructions: "",
+    parking_type: "street",
+    utilities_confirmed: false,
     slot_date: "",
     slot_time: "",
     payment_mode: "cash",
@@ -63,8 +71,11 @@ export default function BookNow() {
         phone: f.phone || r.data.phone || "",
         address_line1: f.address_line1 || r.data.default_address_line1 || "",
         address_line2: f.address_line2 || r.data.default_address_line2 || "",
+        locality: f.locality || r.data.default_locality || "",
+        landmark: f.landmark || r.data.default_landmark || "",
         pincode: f.pincode || r.data.default_pincode || "",
         city: f.city || r.data.default_city || "",
+        state: f.state || r.data.default_state || "",
       }));
     }).catch(() => {});
   }, []);
@@ -90,8 +101,19 @@ export default function BookNow() {
   const referralDiscount = referralValidation?.valid && subtotal >= (referralValidation.min_subtotal || 500)
     ? (referralValidation.discount_inr || 0) : 0;
   const discounted = Math.max(0, subtotal - referralDiscount);
-  const gst = Math.round(discounted * 0.18);
-  const total = discounted + gst;
+
+  // Priority slot detection: weekend (Sat/Sun) or evening (>=17:00)
+  const isPrioritySlot = (() => {
+    if (!form.slot_date || !form.slot_time) return false;
+    const d = new Date(form.slot_date + "T00:00:00");
+    if (d.getDay() === 0 || d.getDay() === 6) return true;
+    const hour = parseInt(form.slot_time.split(":")[0], 10);
+    return hour >= 17;
+  })();
+  const priorityFee = isPrioritySlot ? 99 : 0;
+  const taxable = discounted + priorityFee;
+  const gst = Math.round(taxable * 0.18);
+  const total = taxable + gst;
 
   const validateReferral = async () => {
     const code = form.referral_code.trim().toUpperCase();
@@ -112,7 +134,9 @@ export default function BookNow() {
     if (step === 2)
       return (
         !!form.slot_date && !!form.slot_time && !!form.address_line1.trim() &&
-        /^\d{6}$/.test(form.pincode) && /^\d{10}$/.test(form.phone)
+        !!form.locality.trim() &&
+        /^\d{6}$/.test(form.pincode) && /^\d{10}$/.test(form.phone) &&
+        form.utilities_confirmed
       );
     return true;
   };
@@ -140,7 +164,15 @@ export default function BookNow() {
         pet_type: form.pet_type,
         address_line1: form.address_line1,
         address_line2: form.address_line2,
+        locality: form.locality,
+        landmark: form.landmark,
         pincode: form.pincode,
+        state: form.state,
+        property_type: form.property_type,
+        floor_info: form.floor_info,
+        access_instructions: form.access_instructions,
+        parking_type: form.parking_type,
+        utilities_confirmed: form.utilities_confirmed,
         phone: form.phone,
         slot_date: form.slot_date,
         slot_time: form.slot_time,
@@ -178,7 +210,26 @@ export default function BookNow() {
             <StepServices form={form} services={services} toggleQty={toggleQty} />
           )}
           {step === 2 && (
-            <StepDateAddress form={form} setForm={setForm} slots={slots} />
+            <>
+              <StepDateAddress form={form} setForm={setForm} slots={slots} />
+              {isPrioritySlot && (
+                <div
+                  data-testid="priority-notice"
+                  className="mt-6 rounded-2xl border border-[#D96C4A]/40 bg-[#FDFBF7] p-5 flex items-start gap-3"
+                >
+                  <div className="w-9 h-9 rounded-full bg-[#D96C4A] text-white flex items-center justify-center shrink-0">
+                    <Zap className="w-4 h-4" strokeWidth={1.75}/>
+                  </div>
+                  <div>
+                    <div className="font-serif-display text-xl">Priority slot — ₹99 fee</div>
+                    <div className="text-sm text-[#5C7365] mt-1">
+                      Weekend and evening slots book out fast. This ₹99 fee guarantees a groomer
+                      is allocated for your session and prioritised on the day. Automatically added to your total.
+                    </div>
+                  </div>
+                </div>
+              )}
+            </>
           )}
           {step === 3 && (
             <StepPayment
@@ -250,6 +301,11 @@ export default function BookNow() {
             {referralDiscount > 0 && (
               <div className="flex justify-between text-[#D96C4A]">
                 <span>Referral discount</span><span>− {formatINR(referralDiscount)}</span>
+              </div>
+            )}
+            {priorityFee > 0 && (
+              <div className="flex justify-between text-[#1E3F2D]" data-testid="summary-priority-line">
+                <span>Priority slot fee</span><span>+ {formatINR(priorityFee)}</span>
               </div>
             )}
             <div className="flex justify-between text-[#5C7365]"><span>GST (18%)</span><span>{formatINR(gst)}</span></div>
@@ -443,7 +499,7 @@ function StepDateAddress({ form, setForm, slots }) {
         <Input
           id="addr1"
           data-testid="address-line1-input"
-          placeholder="Flat, building, street"
+          placeholder="Flat / house no., building name, street"
           className="mt-2 rounded-xl bg-[#FDFBF7] border-[#E5DFD3] h-11"
           value={form.address_line1}
           onChange={(e) => setForm((f) => ({ ...f, address_line1: e.target.value }))}
@@ -454,10 +510,32 @@ function StepDateAddress({ form, setForm, slots }) {
         <Input
           id="addr2"
           data-testid="address-line2-input"
-          placeholder="Landmark, area"
+          placeholder="Block, tower, wing"
           className="mt-2 rounded-xl bg-[#FDFBF7] border-[#E5DFD3] h-11"
           value={form.address_line2}
           onChange={(e) => setForm((f) => ({ ...f, address_line2: e.target.value }))}
+        />
+      </div>
+      <div>
+        <Label htmlFor="locality">Locality / Area</Label>
+        <Input
+          id="locality"
+          data-testid="locality-input"
+          placeholder="e.g. Bandra West, HSR Layout"
+          className="mt-2 rounded-xl bg-[#FDFBF7] border-[#E5DFD3] h-11"
+          value={form.locality}
+          onChange={(e) => setForm((f) => ({ ...f, locality: e.target.value }))}
+        />
+      </div>
+      <div>
+        <Label htmlFor="landmark">Nearby landmark (optional)</Label>
+        <Input
+          id="landmark"
+          data-testid="landmark-input"
+          placeholder="e.g. Opposite HDFC Bank"
+          className="mt-2 rounded-xl bg-[#FDFBF7] border-[#E5DFD3] h-11"
+          value={form.landmark}
+          onChange={(e) => setForm((f) => ({ ...f, landmark: e.target.value }))}
         />
       </div>
       <div>
@@ -474,6 +552,17 @@ function StepDateAddress({ form, setForm, slots }) {
         />
       </div>
       <div>
+        <Label htmlFor="state">State (optional)</Label>
+        <Input
+          id="state"
+          data-testid="state-input"
+          placeholder="e.g. Maharashtra"
+          className="mt-2 rounded-xl bg-[#FDFBF7] border-[#E5DFD3] h-11"
+          value={form.state}
+          onChange={(e) => setForm((f) => ({ ...f, state: e.target.value }))}
+        />
+      </div>
+      <div>
         <Label htmlFor="phone">Mobile number</Label>
         <Input
           id="phone"
@@ -485,6 +574,83 @@ function StepDateAddress({ form, setForm, slots }) {
           value={form.phone}
           onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value.replace(/\D/g, "") }))}
         />
+      </div>
+      <div>
+        <Label>Property type</Label>
+        <Select value={form.property_type} onValueChange={(v) => setForm((f) => ({ ...f, property_type: v }))}>
+          <SelectTrigger data-testid="property-type-select" className="mt-2 rounded-xl bg-[#FDFBF7] border-[#E5DFD3] h-11">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="apartment">Apartment / Flat</SelectItem>
+            <SelectItem value="house">Independent house</SelectItem>
+            <SelectItem value="villa">Villa / Bungalow</SelectItem>
+            <SelectItem value="other">Other</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      <div>
+        <Label htmlFor="floor">Floor / lift info (optional)</Label>
+        <Input
+          id="floor"
+          data-testid="floor-input"
+          placeholder="e.g. 5th floor, lift available"
+          className="mt-2 rounded-xl bg-[#FDFBF7] border-[#E5DFD3] h-11"
+          value={form.floor_info}
+          onChange={(e) => setForm((f) => ({ ...f, floor_info: e.target.value }))}
+        />
+      </div>
+      <div className="sm:col-span-2">
+        <Label>Parking</Label>
+        <RadioGroup
+          className="mt-2 grid grid-cols-3 gap-2"
+          value={form.parking_type}
+          onValueChange={(v) => setForm((f) => ({ ...f, parking_type: v }))}
+        >
+          {[
+            { v: "available", label: "Available onsite" },
+            { v: "street", label: "Street parking" },
+            { v: "none", label: "Not available" },
+          ].map((p) => (
+            <label
+              key={p.v}
+              className={cn(
+                "cursor-pointer rounded-xl border h-11 px-3 flex items-center gap-2 text-sm",
+                form.parking_type === p.v ? "border-[#1E3F2D] bg-[#F1EBE1]" : "border-[#E5DFD3] bg-[#FDFBF7]"
+              )}
+            >
+              <RadioGroupItem value={p.v} data-testid={`parking-${p.v}`} />
+              {p.label}
+            </label>
+          ))}
+        </RadioGroup>
+      </div>
+      <div className="sm:col-span-2">
+        <Label htmlFor="access">Entry / access instructions (optional)</Label>
+        <Textarea
+          id="access"
+          data-testid="access-instructions-input"
+          placeholder="Gate code, guard name, doorbell, pet at door…"
+          className="mt-2 rounded-xl bg-[#FDFBF7] border-[#E5DFD3]"
+          value={form.access_instructions}
+          onChange={(e) => setForm((f) => ({ ...f, access_instructions: e.target.value }))}
+        />
+      </div>
+      <div className="sm:col-span-2 rounded-2xl border border-[#E5DFD3] bg-[#F1EBE1] p-4 flex items-start gap-3">
+        <input
+          id="utilities"
+          type="checkbox"
+          data-testid="utilities-confirm"
+          className="mt-1 w-4 h-4 accent-[#1E3F2D]"
+          checked={form.utilities_confirmed}
+          onChange={(e) => setForm((f) => ({ ...f, utilities_confirmed: e.target.checked }))}
+        />
+        <label htmlFor="utilities" className="text-sm cursor-pointer">
+          <div className="font-medium text-[#1E3F2D]">Water and power will be available at the location</div>
+          <div className="text-xs text-[#5C7365] mt-1">
+            Our groomers need running water and an electrical outlet for bathing, blow-drying and clipping.
+          </div>
+        </label>
       </div>
       <div className="sm:col-span-2">
         <Label htmlFor="notes">Notes for the groomer (optional)</Label>

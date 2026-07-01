@@ -60,8 +60,11 @@ class User(BaseModel):
     phone: Optional[str] = None
     default_address_line1: Optional[str] = None
     default_address_line2: Optional[str] = None
+    default_locality: Optional[str] = None
+    default_landmark: Optional[str] = None
     default_pincode: Optional[str] = None
     default_city: Optional[str] = None
+    default_state: Optional[str] = None
     created_at: datetime
 
 
@@ -69,8 +72,11 @@ class ProfileUpdate(BaseModel):
     phone: Optional[str] = None
     default_address_line1: Optional[str] = None
     default_address_line2: Optional[str] = None
+    default_locality: Optional[str] = None
+    default_landmark: Optional[str] = None
     default_pincode: Optional[str] = None
     default_city: Optional[str] = None
+    default_state: Optional[str] = None
 
 
 class SettingsUpdate(BaseModel):
@@ -98,8 +104,16 @@ class BookingCreate(BaseModel):
     pet_type: str  # 'dog' | 'cat'
     address_line1: str
     address_line2: Optional[str] = ""
+    locality: str
+    landmark: Optional[str] = ""
     pincode: str
+    state: Optional[str] = ""
     phone: str
+    property_type: Optional[str] = "apartment"  # apartment | house | villa | other
+    floor_info: Optional[str] = ""  # e.g. "5th floor, no lift"
+    access_instructions: Optional[str] = ""  # gate code, guard, doorbell
+    parking_type: Optional[str] = "street"  # available | street | none
+    utilities_confirmed: bool = False  # water & power available onsite
     slot_date: str  # YYYY-MM-DD
     slot_time: str  # e.g. "10:00"
     items: List[BookingItem]
@@ -303,8 +317,11 @@ async def get_profile(user: User = Depends(get_current_user)):
         "phone": doc.get("phone"),
         "default_address_line1": doc.get("default_address_line1"),
         "default_address_line2": doc.get("default_address_line2"),
+        "default_locality": doc.get("default_locality"),
+        "default_landmark": doc.get("default_landmark"),
         "default_pincode": doc.get("default_pincode"),
         "default_city": doc.get("default_city"),
+        "default_state": doc.get("default_state"),
     }
 
 
@@ -427,6 +444,32 @@ async def validate_referral(code: str, user: User = Depends(get_current_user)):
     return {"valid": True, "discount_inr": 200, "min_subtotal": 500}
 
 
+PRIORITY_SLOT_FEE = 99
+
+
+def _is_priority_slot(slot_date: str, slot_time: str) -> bool:
+    """Weekend (Sat/Sun) or evening (>=17:00) slots are priority."""
+    try:
+        d = datetime.strptime(slot_date, "%Y-%m-%d")
+        if d.weekday() >= 5:  # 5=Sat, 6=Sun
+            return True
+    except Exception:
+        pass
+    try:
+        hour = int(slot_time.split(":")[0])
+        if hour >= 17:
+            return True
+    except Exception:
+        pass
+    return False
+
+
+@api.get("/priority-slot")
+async def priority_slot_info(date: Optional[str] = None, time: Optional[str] = None):
+    is_priority = bool(date and time and _is_priority_slot(date, time))
+    return {"is_priority": is_priority, "fee": PRIORITY_SLOT_FEE if is_priority else 0, "fee_amount": PRIORITY_SLOT_FEE}
+
+
 @api.post("/bookings")
 async def create_booking(payload: BookingCreate, user: User = Depends(get_current_user)):
     city = _city_by_slug(payload.city)
@@ -434,6 +477,13 @@ async def create_booking(payload: BookingCreate, user: User = Depends(get_curren
         raise HTTPException(status_code=400, detail="Unsupported city")
     if not payload.items:
         raise HTTPException(status_code=400, detail="No services selected")
+
+    # Utilities check for at-home grooming: water + power must be available onsite
+    if not payload.utilities_confirmed:
+        raise HTTPException(
+            status_code=400,
+            detail="Please confirm running water and power are available at the location.",
+        )
 
     subtotal = sum(i.price * i.qty for i in payload.items)
 
@@ -454,9 +504,15 @@ async def create_booking(payload: BookingCreate, user: User = Depends(get_curren
             )
 
     discounted_subtotal = max(0, subtotal - referral_discount)
+
+    # Priority slot upsell: weekend or evening slots add ₹99
+    is_priority = _is_priority_slot(payload.slot_date, payload.slot_time)
+    priority_fee = PRIORITY_SLOT_FEE if is_priority else 0
+
     gst_percent = await _get_gst_percent()
-    gst = round(discounted_subtotal * (gst_percent / 100.0), 2)
-    total = round(discounted_subtotal + gst, 2)
+    taxable = discounted_subtotal + priority_fee
+    gst = round(taxable * (gst_percent / 100.0), 2)
+    total = round(taxable + gst, 2)
 
     # Persist phone / address to user profile for auto-fill next time
     await db.users.update_one(
@@ -465,8 +521,11 @@ async def create_booking(payload: BookingCreate, user: User = Depends(get_curren
             "phone": payload.phone,
             "default_address_line1": payload.address_line1,
             "default_address_line2": payload.address_line2,
+            "default_locality": payload.locality,
+            "default_landmark": payload.landmark,
             "default_pincode": payload.pincode,
             "default_city": payload.city,
+            "default_state": payload.state,
         }},
     )
 
@@ -486,7 +545,15 @@ async def create_booking(payload: BookingCreate, user: User = Depends(get_curren
         "pet_type": payload.pet_type,
         "address_line1": payload.address_line1,
         "address_line2": payload.address_line2,
+        "locality": payload.locality,
+        "landmark": payload.landmark,
         "pincode": payload.pincode,
+        "state": payload.state,
+        "property_type": payload.property_type,
+        "floor_info": payload.floor_info,
+        "access_instructions": payload.access_instructions,
+        "parking_type": payload.parking_type,
+        "utilities_confirmed": payload.utilities_confirmed,
         "phone": payload.phone,
         "slot_date": payload.slot_date,
         "slot_time": payload.slot_time,
@@ -494,6 +561,8 @@ async def create_booking(payload: BookingCreate, user: User = Depends(get_curren
         "subtotal": round(subtotal, 2),
         "referral_code_used": referral_code_used,
         "referral_discount": referral_discount,
+        "is_priority_slot": is_priority,
+        "priority_fee": priority_fee,
         "gst": gst,
         "gst_percent": gst_percent,
         "total": total,
@@ -620,9 +689,22 @@ def _build_invoice_pdf(booking: Dict[str, Any]) -> bytes:
     story.append(Paragraph("Billed To", h))
     story.append(Paragraph(f'{booking["user_name"]} — {booking["user_email"]}', p))
     story.append(Paragraph(booking["phone"], p))
-    addr2 = f' , {booking.get("address_line2","")}' if booking.get("address_line2") else ""
-    story.append(Paragraph(
-        f'{booking["address_line1"]}{addr2}, {booking["city_name"]} - {booking["pincode"]}', p))
+    addr_parts = [booking["address_line1"]]
+    if booking.get("address_line2"):
+        addr_parts.append(booking["address_line2"])
+    if booking.get("locality"):
+        addr_parts.append(booking["locality"])
+    addr_parts.append(f'{booking["city_name"]} - {booking["pincode"]}')
+    if booking.get("state"):
+        addr_parts.append(booking["state"])
+    story.append(Paragraph(", ".join(addr_parts), p))
+    if booking.get("landmark"):
+        story.append(Paragraph(f'Landmark: {booking["landmark"]}', p))
+    if booking.get("floor_info") or booking.get("property_type"):
+        parts = []
+        if booking.get("property_type"): parts.append(booking["property_type"].title())
+        if booking.get("floor_info"): parts.append(booking["floor_info"])
+        story.append(Paragraph(" · ".join(parts), p))
     story.append(Spacer(1, 6))
     story.append(Paragraph(
         f'Pet: <b>{booking["pet_name"]}</b> ({booking["pet_type"].title()})', p))
@@ -667,6 +749,11 @@ def _build_invoice_pdf(booking: Dict[str, Any]) -> bytes:
         totals_data.append([
             Paragraph(f'Referral discount ({booking.get("referral_code_used","")})', p),
             Paragraph(f'− ₹ {booking["referral_discount"]:.0f}', p),
+        ])
+    if booking.get("priority_fee", 0) > 0:
+        totals_data.append([
+            Paragraph("Priority slot fee", p),
+            Paragraph(f'₹ {booking["priority_fee"]:.0f}', p),
         ])
     totals_data += [
         [Paragraph(f'GST ({booking.get("gst_percent", 18):.0f}%)' if booking.get("gst_percent") else "GST (18%)", p),

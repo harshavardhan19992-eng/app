@@ -1,0 +1,39 @@
+{
+  "summary": "Iteration 3 backend testing for PawGroom API. Extended /app/backend/tests/backend_test.py: updated legacy booking payloads to include the new required fields (locality, utilities_confirmed=true) and moved slot dates off weekends so legacy GST/subtotal math still holds. Added 15 new tests across 5 classes: TestPrioritySlotInfo (5) — GET /api/priority-slot for weekend/weekday/evening/missing params; TestPriorityBooking (3) — booking weekend & weekday-evening -> priority_fee=99 with GST on (subtotal+priority_fee), regular slot -> no fee; TestHomeServiceFields (5) — utilities_confirmed=false -> 400 water/power msg, missing locality -> 422, all 7 new fields persisted on booking doc, profile auto-persists default_locality/landmark/state after booking, PATCH /api/profile with new default_* fields; TestInvoicePdfIter3 (1) — PDF invoice for iteration-3 booking returns application/pdf and %PDF magic bytes; TestGstWithPriorityFee (1) — gst_percent=5 + weekend slot => gst=round(1099*0.05,2)=54.95, total=1153.95, then gst reset to 18. All 71 tests pass (56 regression from iteration 2 + 15 new). Admin password, UPI id, UPI payee, and gst_percent restored to defaults verified via curl after suite run.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/priority-slot", "issue": "Silently returns is_priority=false when date/time missing (no 400 for missing params). Acceptable per current contract but consider requiring both params or making them mandatory."},
+      {"endpoint": "/api/priority-slot", "issue": "Malformed date (e.g. 'not-a-date') is swallowed by broad try/except; endpoint returns is_priority based only on time. Consider returning 400 for invalid inputs."},
+      {"endpoint": "POST /api/bookings", "issue": "utilities_confirmed defaults to False in Pydantic; missing field is treated same as false and yields 400. Fine but the 400 message ('running water and power') is technically for utilities_confirmed=false, not for schema-missing. Consider marking utilities_confirmed as required=True in the model to distinguish 422 (missing) from 400 (declined)."},
+      {"endpoint": "POST /api/bookings", "issue": "locality is required but pincode is not validated for length/pattern (any string accepted). Consider a regex/length validator (6 digits for IN)."},
+      {"endpoint": "POST /api/bookings", "issue": "property_type/parking_type accept any string (no Literal/enum). Consider Pydantic Literal[apartment|house|villa|other] / Literal[available|street|none]."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Optional: tighten Pydantic types on BookingCreate (property_type/parking_type Literals, pincode regex, utilities_confirmed as strict bool required=True).",
+    "Optional: /api/priority-slot should 400 when required date/time missing or malformed instead of silently returning is_priority=false.",
+    "Optional (carry-over from iter 2): modularise server.py (~975 lines) and migrate @app.on_event to lifespan.",
+    "Optional: enforce priority_fee visibility in PDF only when >0 (already handled), and consider a subtotal-with-priority line in the invoice for clarity."
+  ],
+  "critical_code_review_comments": [
+    "_is_priority_slot uses bare try/except and silently defaults to non-priority on bad input — hides parse errors. Prefer explicit validation and 400 responses upstream.",
+    "BookingCreate.utilities_confirmed default is False, so the model accepts a POST without the key and then business logic rejects it with 400. If it's truly required, mark it required in the schema so clients get a 422 with a clear 'field required' error.",
+    "server.py has grown to ~975 lines. Reiterating iteration 2 comment: split into auth/admin/bookings/invoice/settings/seed modules before iteration 4.",
+    "Booking auto-persists profile fields (now including locality/landmark/state) unconditionally on every POST — will silently overwrite any user-edited profile default with the latest booking values. Consider only setting when the profile field is currently null, or make it opt-in.",
+    "GST rounding uses round(x, 2) which is banker's rounding in Python. For invoices, prefer Decimal + ROUND_HALF_UP to avoid off-by-one on borderline totals.",
+    "list_customers still N+1 (unchanged from iter 2) — will need a $lookup aggregation before scale."
+  ],
+  "updated_files": ["/app/backend/tests/backend_test.py"],
+  "success_rate": {"backend": "100% (71/71)", "frontend": "not tested (backend only per request)"},
+  "test_credentials": "Admin admin@pawgroom.in / Admin@123 (restored). Customer sessions seeded in Mongo with TEST_ prefix; cleaned up after each test.",
+  "seed_data_creation": "Ephemeral TEST_-prefixed users/sessions/bookings created and torn down in fixtures. Transient state (gst_percent=5, TEST UPI id, admin password TempPass!456) all restored to defaults (18, pawgroom@upi, Admin@123) by test teardown. Verified post-run via curl.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend test suite baseline is now 71 tests (~7s under parallel -n 2 loadscope). Helper functions _iter3_payload() and _fresh_customer()/_cleanup() live at module scope near the bottom — reuse them for future booking tests. Legacy TestBookings._valid_payload now includes locality+utilities_confirmed and uses weekday non-evening dates (2026-02-02 Mon 10:00) so subtotal/gst math remains stable. Priority slot logic: Sat/Sun OR hour>=17. Priority fee is TAXABLE (included in GST base but not in subtotal). If iteration 4 adds more mandatory booking fields, update both _valid_payload and _iter3_payload payloads. State restoration is critical — always wrap gst_percent/UPI/admin-password mutations in try/finally."
+}

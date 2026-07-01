@@ -76,8 +76,11 @@ export default function AdminBookings() {
                   <div>{b.city_name}</div>
                   <div className="text-xs text-[#5C7365]">{b.slot_date} • {b.slot_time}</div>
                 </td>
-                <td className="px-4 py-3 text-xs text-[#5C7365] max-w-[220px]">
-                  {b.address_line1}{b.address_line2 ? `, ${b.address_line2}` : ""}, {b.pincode}
+                <td className="px-4 py-3 text-xs text-[#5C7365] max-w-[240px]">
+                  <div>{b.address_line1}{b.address_line2 ? `, ${b.address_line2}` : ""}</div>
+                  {b.locality && <div>{b.locality}</div>}
+                  <div>{b.pincode}{b.state ? `, ${b.state}` : ""}</div>
+                  {b.landmark && <div className="italic">Near {b.landmark}</div>}
                 </td>
                 <td className="px-4 py-3 text-right">{formatINR(b.total)}</td>
                 <td className="px-4 py-3 text-xs">

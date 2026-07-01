@@ -18,8 +18,11 @@ export default function Profile() {
     phone: "",
     default_address_line1: "",
     default_address_line2: "",
+    default_locality: "",
+    default_landmark: "",
     default_pincode: "",
     default_city: "",
+    default_state: "",
   });
 
   useEffect(() => {
@@ -31,8 +34,11 @@ export default function Profile() {
       phone: r.data.phone || "",
       default_address_line1: r.data.default_address_line1 || "",
       default_address_line2: r.data.default_address_line2 || "",
+      default_locality: r.data.default_locality || "",
+      default_landmark: r.data.default_landmark || "",
       default_pincode: r.data.default_pincode || "",
       default_city: r.data.default_city || "",
+      default_state: r.data.default_state || "",
     })));
   }, [user, loading, navigate]);
 
@@ -103,10 +109,30 @@ export default function Profile() {
             <Label>Address line 2 (optional)</Label>
             <Input
               data-testid="profile-addr2-input"
-              placeholder="Landmark, area"
+              placeholder="Block, tower, wing"
               className="mt-2 rounded-xl bg-[#FDFBF7] border-[#E5DFD3] h-11"
               value={form.default_address_line2}
               onChange={(e) => setForm((f) => ({ ...f, default_address_line2: e.target.value }))}
+            />
+          </div>
+          <div>
+            <Label>Locality / Area</Label>
+            <Input
+              data-testid="profile-locality-input"
+              placeholder="e.g. Bandra West"
+              className="mt-2 rounded-xl bg-[#FDFBF7] border-[#E5DFD3] h-11"
+              value={form.default_locality}
+              onChange={(e) => setForm((f) => ({ ...f, default_locality: e.target.value }))}
+            />
+          </div>
+          <div>
+            <Label>Landmark (optional)</Label>
+            <Input
+              data-testid="profile-landmark-input"
+              placeholder="e.g. Opposite metro"
+              className="mt-2 rounded-xl bg-[#FDFBF7] border-[#E5DFD3] h-11"
+              value={form.default_landmark}
+              onChange={(e) => setForm((f) => ({ ...f, default_landmark: e.target.value }))}
             />
           </div>
           <div>
@@ -145,6 +171,15 @@ export default function Profile() {
             onClick={save}
             disabled={saving}
             className="rounded-full bg-[#1E3F2D] hover:bg-[#25523a] text-white h-11 px-6"
+          >
+            {saving ? "Saving…" : "Save details"}
+          </Button>
+        </div>
+      </div>
+    </main>
+  );
+}
+Name="rounded-full bg-[#1E3F2D] hover:bg-[#25523a] text-white h-11 px-6"
           >
             {saving ? "Saving…" : "Save details"}
           </Button>

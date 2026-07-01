@@ -291,9 +291,17 @@ class TestBookings:
             "pet_type": "dog",
             "address_line1": "123 Test St",
             "address_line2": "",
+            "locality": "HSR Layout",
+            "landmark": "Opp Domino",
             "pincode": "400001",
+            "state": "Maharashtra",
+            "property_type": "apartment",
+            "floor_info": "3rd floor",
+            "access_instructions": "Ring doorbell",
+            "parking_type": "street",
+            "utilities_confirmed": True,
             "phone": "9999999999",
-            "slot_date": "2026-02-01",
+            "slot_date": "2026-02-02",
             "slot_time": "10:00",
             "items": [{
                 "service_id": "svc_test",
@@ -580,8 +588,13 @@ class TestBookingAutoPersistProfile:
             payload = {
                 "city": "delhi", "pet_name": "Rex", "pet_type": "dog",
                 "address_line1": "TEST persisted addr", "address_line2": "",
-                "pincode": "110001", "phone": "9887766554",
-                "slot_date": "2026-03-01", "slot_time": "11:00",
+                "locality": "Connaught Place", "landmark": "Near Metro",
+                "pincode": "110001", "state": "Delhi",
+                "property_type": "apartment", "floor_info": "2nd floor",
+                "access_instructions": "Guard at gate", "parking_type": "available",
+                "utilities_confirmed": True,
+                "phone": "9887766554",
+                "slot_date": "2026-03-02", "slot_time": "11:00",
                 "items": [{"service_id": "svc_x", "service_name": "Bath",
                            "pet_type": "dog", "price": 800, "qty": 1}],
                 "payment_mode": "cash", "upi_txn_ref": None, "notes": "",
@@ -597,6 +610,9 @@ class TestBookingAutoPersistProfile:
             assert p["default_address_line1"] == "TEST persisted addr"
             assert p["default_pincode"] == "110001"
             assert p["default_city"] == "delhi"
+            assert p["default_locality"] == "Connaught Place"
+            assert p["default_landmark"] == "Near Metro"
+            assert p["default_state"] == "Delhi"
         finally:
             db.user_sessions.delete_many({"user_id": uid})
             db.bookings.delete_many({"user_id": uid})
@@ -655,7 +671,9 @@ class TestDynamicGst:
             payload = {
                 "city": "hyderabad", "pet_name": "Milo", "pet_type": "dog",
                 "address_line1": "TEST gst", "address_line2": "",
-                "pincode": "500001", "phone": "9000000001",
+                "locality": "Banjara Hills", "pincode": "500001",
+                "state": "Telangana", "utilities_confirmed": True,
+                "phone": "9000000001",
                 "slot_date": "2026-04-01", "slot_time": "12:00",
                 "items": [{"service_id": "svc_g", "service_name": "Nails",
                            "pet_type": "dog", "price": 1000, "qty": 1}],
@@ -682,7 +700,9 @@ class TestDynamicGst:
         payload = {
             "city": "chennai", "pet_name": "Coco", "pet_type": "dog",
             "address_line1": "TEST gst2", "address_line2": "",
-            "pincode": "600001", "phone": "9000000002",
+            "locality": "T Nagar", "pincode": "600001",
+            "state": "Tamil Nadu", "utilities_confirmed": True,
+            "phone": "9000000002",
             "slot_date": "2026-04-02", "slot_time": "13:00",
             "items": [{"service_id": "svc_g2", "service_name": "Nails",
                        "pet_type": "dog", "price": 1000, "qty": 1}],
@@ -780,3 +800,293 @@ class TestAdminCustomers:
         r = s.get(f"{API}/admin/customers/user_DOES_NOT_EXIST",
                   headers=admin_headers)
         assert r.status_code == 404
+
+
+
+# ---------- Iteration 3: Priority slot upsell + home-service fields ----------
+
+class TestPrioritySlotInfo:
+    """GET /api/priority-slot — detects Sat/Sun and >=17:00 as priority."""
+
+    def test_weekend_is_priority(self, s):
+        # 2026-08-01 is a Saturday
+        r = s.get(f"{API}/priority-slot", params={"date": "2026-08-01", "time": "15:00"})
+        assert r.status_code == 200
+        d = r.json()
+        assert d["is_priority"] is True
+        assert d["fee"] == 99
+
+    def test_weekday_morning_not_priority(self, s):
+        # 2026-08-03 is a Monday
+        r = s.get(f"{API}/priority-slot", params={"date": "2026-08-03", "time": "15:00"})
+        assert r.status_code == 200
+        d = r.json()
+        assert d["is_priority"] is False
+        assert d["fee"] == 0
+
+    def test_weekday_evening_is_priority(self, s):
+        r = s.get(f"{API}/priority-slot", params={"date": "2026-08-03", "time": "17:00"})
+        assert r.status_code == 200
+        d = r.json()
+        assert d["is_priority"] is True
+        assert d["fee"] == 99
+
+    def test_sunday_evening_is_priority(self, s):
+        # 2026-08-02 Sunday
+        r = s.get(f"{API}/priority-slot", params={"date": "2026-08-02", "time": "18:00"})
+        assert r.status_code == 200
+        assert r.json()["is_priority"] is True
+
+    def test_missing_params_not_priority(self, s):
+        r = s.get(f"{API}/priority-slot")
+        assert r.status_code == 200
+        assert r.json()["is_priority"] is False
+
+
+def _iter3_payload(**overrides):
+    p = {
+        "city": "bangalore",
+        "pet_name": "Nova",
+        "pet_type": "dog",
+        "address_line1": "TEST 42 Iter3",
+        "address_line2": "",
+        "locality": "HSR Layout",
+        "landmark": "Opp Domino",
+        "pincode": "560001",
+        "state": "Karnataka",
+        "property_type": "villa",
+        "floor_info": "Ground floor",
+        "access_instructions": "Ring doorbell twice",
+        "parking_type": "available",
+        "utilities_confirmed": True,
+        "phone": "9000012345",
+        "slot_date": "2026-08-03",  # Monday
+        "slot_time": "10:00",
+        "items": [{"service_id": "svc_i3", "service_name": "Bath",
+                   "pet_type": "dog", "price": 1000, "qty": 1}],
+        "payment_mode": "cash",
+        "upi_txn_ref": None,
+        "notes": "",
+    }
+    p.update(overrides)
+    return p
+
+
+def _fresh_customer():
+    uid = f"user_TEST_{uuid.uuid4().hex[:8]}"
+    tok = f"sess_TEST_{uuid.uuid4().hex}"
+    db.users.insert_one({
+        "user_id": uid, "email": f"TEST_{uid}@ex.com", "name": "Iter3",
+        "picture": None, "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    db.user_sessions.insert_one({
+        "user_id": uid, "session_token": tok,
+        "expires_at": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    return uid, tok
+
+
+def _cleanup(uid):
+    db.user_sessions.delete_many({"user_id": uid})
+    db.bookings.delete_many({"user_id": uid})
+    db.users.delete_many({"user_id": uid})
+
+
+class TestPriorityBooking:
+    """Booking with weekend/evening slot -> priority_fee=99 applied, GST on (subtotal-referral+priority_fee)."""
+
+    def test_weekend_booking_priority_fee(self, s):
+        uid, tok = _fresh_customer()
+        h = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
+        try:
+            payload = _iter3_payload(slot_date="2026-08-01", slot_time="10:00")  # Saturday
+            r = s.post(f"{API}/bookings", json=payload, headers=h)
+            assert r.status_code == 200, r.text
+            b = r.json()
+            assert b["is_priority_slot"] is True
+            assert b["priority_fee"] == 99
+            assert b["subtotal"] == 1000  # priority fee NOT in subtotal
+            # gst_percent should be 18 (default); taxable=1000+99=1099; gst=197.82
+            assert b["gst_percent"] == 18.0 or b["gst_percent"] == 18
+            assert b["gst"] == round(1099 * 0.18, 2)
+            assert b["total"] == round(1099 + b["gst"], 2)
+        finally:
+            _cleanup(uid)
+
+    def test_evening_weekday_priority(self, s):
+        uid, tok = _fresh_customer()
+        h = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
+        try:
+            payload = _iter3_payload(slot_date="2026-08-03", slot_time="18:00")  # Mon 18:00
+            r = s.post(f"{API}/bookings", json=payload, headers=h)
+            assert r.status_code == 200, r.text
+            b = r.json()
+            assert b["is_priority_slot"] is True
+            assert b["priority_fee"] == 99
+            assert b["gst"] == round(1099 * 0.18, 2)
+            assert b["total"] == round(1099 + b["gst"], 2)
+        finally:
+            _cleanup(uid)
+
+    def test_regular_slot_no_priority(self, s):
+        uid, tok = _fresh_customer()
+        h = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
+        try:
+            payload = _iter3_payload(slot_date="2026-08-03", slot_time="10:00")  # Mon morning
+            r = s.post(f"{API}/bookings", json=payload, headers=h)
+            assert r.status_code == 200, r.text
+            b = r.json()
+            assert b["is_priority_slot"] is False
+            assert b["priority_fee"] == 0
+            assert b["subtotal"] == 1000
+            assert b["gst"] == 180.0  # 1000 * 0.18
+            assert b["total"] == 1180.0
+        finally:
+            _cleanup(uid)
+
+
+class TestHomeServiceFields:
+    """New location fields validation + persistence."""
+
+    def test_missing_utilities_confirmed_rejected(self, s):
+        uid, tok = _fresh_customer()
+        h = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
+        try:
+            payload = _iter3_payload(utilities_confirmed=False)
+            r = s.post(f"{API}/bookings", json=payload, headers=h)
+            assert r.status_code == 400
+            msg = r.json().get("detail", "").lower()
+            assert "water" in msg or "power" in msg
+        finally:
+            _cleanup(uid)
+
+    def test_missing_locality_returns_422(self, s):
+        uid, tok = _fresh_customer()
+        h = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
+        try:
+            payload = _iter3_payload()
+            del payload["locality"]
+            r = s.post(f"{API}/bookings", json=payload, headers=h)
+            assert r.status_code == 422
+        finally:
+            _cleanup(uid)
+
+    def test_new_fields_persisted_on_booking(self, s):
+        uid, tok = _fresh_customer()
+        h = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
+        try:
+            payload = _iter3_payload(
+                locality="HSR Layout",
+                landmark="Opp Domino",
+                state="Karnataka",
+                property_type="villa",
+                floor_info="Ground floor",
+                access_instructions="Ring doorbell twice",
+                parking_type="available",
+            )
+            r = s.post(f"{API}/bookings", json=payload, headers=h)
+            assert r.status_code == 200, r.text
+            bid = r.json()["booking_id"]
+
+            g = s.get(f"{API}/bookings/{bid}", headers=h)
+            assert g.status_code == 200
+            b = g.json()
+            assert b["locality"] == "HSR Layout"
+            assert b["landmark"] == "Opp Domino"
+            assert b["state"] == "Karnataka"
+            assert b["property_type"] == "villa"
+            assert b["floor_info"] == "Ground floor"
+            assert b["access_instructions"] == "Ring doorbell twice"
+            assert b["parking_type"] == "available"
+            assert b["utilities_confirmed"] is True
+        finally:
+            _cleanup(uid)
+
+    def test_profile_auto_persists_new_fields(self, s):
+        uid, tok = _fresh_customer()
+        h = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
+        try:
+            payload = _iter3_payload(
+                locality="Koramangala", landmark="Near Forum Mall", state="Karnataka",
+            )
+            r = s.post(f"{API}/bookings", json=payload, headers=h)
+            assert r.status_code == 200, r.text
+
+            g = s.get(f"{API}/profile", headers=h)
+            assert g.status_code == 200
+            p = g.json()
+            assert p["default_locality"] == "Koramangala"
+            assert p["default_landmark"] == "Near Forum Mall"
+            assert p["default_state"] == "Karnataka"
+            assert p["default_address_line1"] == payload["address_line1"]
+        finally:
+            _cleanup(uid)
+
+    def test_profile_patch_new_fields(self, s):
+        uid, tok = _fresh_customer()
+        h = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
+        try:
+            r = s.patch(f"{API}/profile", json={
+                "default_locality": "Indiranagar",
+                "default_landmark": "100ft Rd",
+                "default_state": "Karnataka",
+            }, headers=h)
+            assert r.status_code == 200
+
+            g = s.get(f"{API}/profile", headers=h)
+            p = g.json()
+            assert p["default_locality"] == "Indiranagar"
+            assert p["default_landmark"] == "100ft Rd"
+            assert p["default_state"] == "Karnataka"
+        finally:
+            _cleanup(uid)
+
+
+class TestInvoicePdfIter3:
+    """PDF invoice for a booking with new location fields returns valid PDF."""
+
+    def test_invoice_pdf_ok(self, s):
+        uid, tok = _fresh_customer()
+        h = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
+        try:
+            payload = _iter3_payload()
+            r = s.post(f"{API}/bookings", json=payload, headers=h)
+            assert r.status_code == 200
+            bid = r.json()["booking_id"]
+
+            inv = s.get(f"{API}/bookings/{bid}/invoice.pdf", headers=h)
+            assert inv.status_code == 200
+            assert inv.headers.get("content-type", "").startswith("application/pdf")
+            assert len(inv.content) > 1000
+            assert inv.content[:4] == b"%PDF"
+        finally:
+            _cleanup(uid)
+
+
+class TestGstWithPriorityFee:
+    """GST customization interplays with priority_fee: gst = (discounted_subtotal + priority_fee) * pct."""
+
+    def test_gst_5pct_with_priority(self, s, admin_headers):
+        # Set gst to 5
+        r = s.patch(f"{API}/admin/settings", json={"gst_percent": 5}, headers=admin_headers)
+        assert r.status_code == 200
+
+        uid, tok = _fresh_customer()
+        h = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
+        try:
+            payload = _iter3_payload(slot_date="2026-08-01", slot_time="10:00")  # Saturday
+            r = s.post(f"{API}/bookings", json=payload, headers=h)
+            assert r.status_code == 200, r.text
+            b = r.json()
+            # subtotal=1000, priority=99, taxable=1099, gst=5% => 54.95, total=1153.95
+            assert b["is_priority_slot"] is True
+            assert b["priority_fee"] == 99
+            assert b["subtotal"] == 1000
+            assert b["gst_percent"] in (5.0, 5)
+            assert b["gst"] == round(1099 * 0.05, 2)
+            assert b["total"] == round(1099 + b["gst"], 2)
+        finally:
+            _cleanup(uid)
+            # restore gst
+            s.patch(f"{API}/admin/settings", json={"gst_percent": 18}, headers=admin_headers)

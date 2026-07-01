@@ -122,10 +122,15 @@ export default function AdminCustomers() {
                     <span>
                       {detail.customer.default_address_line1 || "Not set"}
                       {detail.customer.default_address_line2 ? `, ${detail.customer.default_address_line2}` : ""}
+                      {detail.customer.default_locality ? `, ${detail.customer.default_locality}` : ""}
                       {detail.customer.default_city ? `, ${detail.customer.default_city}` : ""}
                       {detail.customer.default_pincode ? ` – ${detail.customer.default_pincode}` : ""}
+                      {detail.customer.default_state ? `, ${detail.customer.default_state}` : ""}
                     </span>
                   </div>
+                  {detail.customer.default_landmark && (
+                    <div className="text-xs text-[#5C7365] mt-2">Landmark: {detail.customer.default_landmark}</div>
+                  )}
                 </div>
                 <div className="rounded-xl bg-[#F1EBE1] p-4 sm:col-span-2 flex items-center gap-4">
                   <Gift className="w-4 h-4" strokeWidth={1.75}/>
