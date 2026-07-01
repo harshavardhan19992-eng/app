@@ -56,6 +56,17 @@ export default function BookNow() {
     api.get("/cities").then((r) => setCities(r.data));
     api.get("/slots").then((r) => setSlots(r.data));
     api.get("/payment-info").then((r) => setPayInfo(r.data));
+    // Auto-fill from saved profile
+    api.get("/profile").then((r) => {
+      setForm((f) => ({
+        ...f,
+        phone: f.phone || r.data.phone || "",
+        address_line1: f.address_line1 || r.data.default_address_line1 || "",
+        address_line2: f.address_line2 || r.data.default_address_line2 || "",
+        pincode: f.pincode || r.data.default_pincode || "",
+        city: f.city || r.data.default_city || "",
+      }));
+    }).catch(() => {});
   }, []);
 
   useEffect(() => {

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { api } from "@/lib/api";
+import { api, setCustomerToken } from "@/lib/api";
 import { PawPrint } from "lucide-react";
 
 // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
@@ -21,6 +21,8 @@ export default function AuthCallback() {
     api
       .post("/auth/session", { session_id })
       .then((r) => {
+        // Store session token as fallback for browsers that block third-party cookies
+        if (r.data.session_token) setCustomerToken(r.data.session_token);
         window.history.replaceState({}, "", "/dashboard");
         navigate("/dashboard", { replace: true, state: { user: r.data } });
       })

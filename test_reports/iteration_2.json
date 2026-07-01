@@ -1,0 +1,36 @@
+{
+  "summary": "Iteration 2 backend testing for PawGroom API. Extended /app/backend/tests/backend_test.py with 25 new tests covering: /health K8s probe (already in v1), /api/profile GET+PATCH with auth guards, booking auto-persisting phone/address into user profile, admin settings CRUD (upi_id, upi_payee_name, gst_percent) with public /api/payment-info reflection, dynamic GST on new bookings (5% then reset to 18%), admin password change flow (wrong current -> 401, short new -> 400, success + restore), and admin customers list/detail (incl. 404). All 56 tests passed (31 regression + 25 new = 100%). Global state (admin password, UPI id, GST%) was restored to defaults inside test fixtures.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/auth/logout", "issue": "Still only reads Bearer token as a fallback for the DB delete via cookie path in tests. Non-blocking (fix present in server.py — accepts both cookie and Authorization header)."},
+      {"endpoint": "/api/admin/settings (PATCH)", "issue": "No validation on gst_percent range (accepts any float, incl. negative or >100). Consider a Pydantic validator (0<=gst<=28)."},
+      {"endpoint": "/api/admin/settings (PATCH)", "issue": "No validation on upi_id format (e.g., x@bank). Accepts any string."},
+      {"endpoint": "/api/admin/password", "issue": "New password only length-checked (>=6). No complexity requirement; consider enforcing mix of chars for admin accounts."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Optional: add Pydantic bounds on SettingsUpdate.gst_percent (0<=x<=28) and upi_id regex.",
+    "Optional: enforce stronger admin password policy (length + complexity).",
+    "Optional: migrate deprecated @app.on_event startup/shutdown to FastAPI lifespan (carried over from iteration 1)."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now ~890 lines. Modularise (auth, admin, bookings, invoice, settings, seed) before further growth.",
+    "GET /api/admin/settings falls back to env UPI_ID/UPI_PAYEE_NAME but PATCH stores only the fields sent. First PATCH without upi_id leaves settings doc partial and public /api/payment-info then only sees the changed field — env fallback for the missing key still works via the `.get(..., UPI_ID)` pattern (verified). Behavior fine, just note it is asymmetric between /admin/settings and /payment-info if the settings doc exists but is missing keys.",
+    "list_customers issues N+1 queries (find + count + aggregate per user). Fine for small tenant sizes; use a single aggregation pipeline with $lookup for scale.",
+    "Booking auto-persists phone/address unconditionally — no consent check. Acceptable for MVP but note privacy implication.",
+    "Admin password change does not invalidate existing admin JWTs. Old JWTs remain valid until 2-day expiry after a password rotation."
+  ],
+  "updated_files": ["/app/backend/tests/backend_test.py"],
+  "success_rate": {"backend": "100% (56/56)", "frontend": "not tested (backend only per request)"},
+  "test_credentials": "Admin admin@pawgroom.in / Admin@123 (restored by tests). Customer sessions seeded in Mongo (TEST_ prefix), cleaned up after.",
+  "seed_data_creation": "Tests create ephemeral TEST_-prefixed users/sessions/bookings in Mongo and delete them in fixture teardown. TEST UPI id/payee and gst_percent=5 are set transiently and restored (pawgroom@upi / PawGroom Services / 18%). Admin password is changed to TempPass!456 and restored to Admin@123.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All 56 pytest tests pass (~7s runtime, parallel with pytest-xdist). Test suite is the regression baseline for future iterations. /api/auth/session (Emergent OAuth exchange) is still NOT covered directly — sessions are seeded in Mongo and used with Authorization: Bearer <token> to exercise the fallback auth path (this is the resilience path added this iteration). State-restoring fixtures ensure admin password, UPI id/payee, and gst_percent are all returned to defaults."
+}

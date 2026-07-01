@@ -12,11 +12,14 @@ import CustomerLogin from "@/pages/CustomerLogin";
 import AuthCallback from "@/pages/AuthCallback";
 import CustomerDashboard from "@/pages/CustomerDashboard";
 import BookNow from "@/pages/BookNow";
+import Profile from "@/pages/Profile";
 import AdminLogin from "@/pages/AdminLogin";
 import AdminShell from "@/pages/AdminShell";
 import AdminDashboard from "@/pages/AdminDashboard";
 import AdminBookings from "@/pages/AdminBookings";
 import AdminServices from "@/pages/AdminServices";
+import AdminCustomers from "@/pages/AdminCustomers";
+import AdminSettings from "@/pages/AdminSettings";
 
 function AppRouter() {
   const location = useLocation();

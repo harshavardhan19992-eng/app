@@ -57,7 +57,31 @@ class User(BaseModel):
     name: str
     picture: Optional[str] = None
     referral_code: Optional[str] = None
+    phone: Optional[str] = None
+    default_address_line1: Optional[str] = None
+    default_address_line2: Optional[str] = None
+    default_pincode: Optional[str] = None
+    default_city: Optional[str] = None
     created_at: datetime
+
+
+class ProfileUpdate(BaseModel):
+    phone: Optional[str] = None
+    default_address_line1: Optional[str] = None
+    default_address_line2: Optional[str] = None
+    default_pincode: Optional[str] = None
+    default_city: Optional[str] = None
+
+
+class SettingsUpdate(BaseModel):
+    upi_id: Optional[str] = None
+    upi_payee_name: Optional[str] = None
+    gst_percent: Optional[float] = None
+
+
+class AdminPasswordChange(BaseModel):
+    current_password: str
+    new_password: str
 
 
 class BookingItem(BaseModel):
@@ -262,7 +286,35 @@ async def process_session(request: Request, response: Response):
     )
     return {
         "user_id": user_id, "email": email, "name": name, "picture": picture,
+        # Also return the session_token so the frontend can store it as a
+        # fallback Bearer token — needed when browsers block third-party cookies
+        # (e.g., prod frontend + preview backend on different domains).
+        "session_token": session_token,
     }
+
+
+@api.get("/profile")
+async def get_profile(user: User = Depends(get_current_user)):
+    doc = await db.users.find_one({"user_id": user.user_id}, {"_id": 0})
+    return {
+        "user_id": doc["user_id"],
+        "email": doc["email"],
+        "name": doc["name"],
+        "phone": doc.get("phone"),
+        "default_address_line1": doc.get("default_address_line1"),
+        "default_address_line2": doc.get("default_address_line2"),
+        "default_pincode": doc.get("default_pincode"),
+        "default_city": doc.get("default_city"),
+    }
+
+
+@api.patch("/profile")
+async def update_profile(payload: ProfileUpdate, user: User = Depends(get_current_user)):
+    updates = {k: v for k, v in payload.model_dump().items() if v is not None}
+    if updates:
+        await db.users.update_one({"user_id": user.user_id}, {"$set": updates})
+    doc = await db.users.find_one({"user_id": user.user_id}, {"_id": 0})
+    return doc
 
 
 @api.get("/auth/me")
@@ -273,6 +325,10 @@ async def auth_me(user: User = Depends(get_current_user)):
 @api.post("/auth/logout")
 async def logout(request: Request, response: Response):
     token = request.cookies.get("session_token")
+    if not token:
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            token = auth.split(" ", 1)[1]
     if token:
         await db.user_sessions.delete_many({"session_token": token})
     response.delete_cookie("session_token", path="/", samesite="none", secure=True)
@@ -398,8 +454,21 @@ async def create_booking(payload: BookingCreate, user: User = Depends(get_curren
             )
 
     discounted_subtotal = max(0, subtotal - referral_discount)
-    gst = round(discounted_subtotal * 0.18, 2)
+    gst_percent = await _get_gst_percent()
+    gst = round(discounted_subtotal * (gst_percent / 100.0), 2)
     total = round(discounted_subtotal + gst, 2)
+
+    # Persist phone / address to user profile for auto-fill next time
+    await db.users.update_one(
+        {"user_id": user.user_id},
+        {"$set": {
+            "phone": payload.phone,
+            "default_address_line1": payload.address_line1,
+            "default_address_line2": payload.address_line2,
+            "default_pincode": payload.pincode,
+            "default_city": payload.city,
+        }},
+    )
 
     booking_id = f"bkg_{uuid.uuid4().hex[:10]}"
     invoice_no = f"INV-{datetime.now(timezone.utc).strftime('%y%m')}-{uuid.uuid4().hex[:5].upper()}"
@@ -426,6 +495,7 @@ async def create_booking(payload: BookingCreate, user: User = Depends(get_curren
         "referral_code_used": referral_code_used,
         "referral_discount": referral_discount,
         "gst": gst,
+        "gst_percent": gst_percent,
         "total": total,
         "payment_mode": payload.payment_mode,
         "payment_status": "paid" if payload.payment_mode == "upi" and payload.upi_txn_ref else "pending",
@@ -599,7 +669,8 @@ def _build_invoice_pdf(booking: Dict[str, Any]) -> bytes:
             Paragraph(f'− ₹ {booking["referral_discount"]:.0f}', p),
         ])
     totals_data += [
-        [Paragraph("GST (18%)", p), Paragraph(f'₹ {booking["gst"]:.0f}', p)],
+        [Paragraph(f'GST ({booking.get("gst_percent", 18):.0f}%)' if booking.get("gst_percent") else "GST (18%)", p),
+         Paragraph(f'₹ {booking["gst"]:.0f}', p)],
         [Paragraph("<b>Total</b>", p), Paragraph(f'<b>₹ {booking["total"]:.0f}</b>', p)],
     ]
     totals = Table(totals_data, colWidths=[130 * mm, 30 * mm])
@@ -642,7 +713,95 @@ async def download_invoice(booking_id: str, user: User = Depends(get_current_use
 
 @api.get("/payment-info")
 async def payment_info():
+    doc = await db.settings.find_one({"_id": "global"}, {"_id": 0})
+    if doc:
+        return {"upi_id": doc.get("upi_id", UPI_ID), "payee_name": doc.get("upi_payee_name", UPI_PAYEE_NAME)}
     return {"upi_id": UPI_ID, "payee_name": UPI_PAYEE_NAME}
+
+
+async def _get_gst_percent() -> float:
+    doc = await db.settings.find_one({"_id": "global"}, {"_id": 0})
+    if doc and "gst_percent" in doc:
+        try:
+            return float(doc["gst_percent"])
+        except Exception:
+            return 18.0
+    return 18.0
+
+
+# -------------------- Admin Settings --------------------
+@api.get("/admin/settings")
+async def get_settings(admin=Depends(get_current_admin)):
+    doc = await db.settings.find_one({"_id": "global"}, {"_id": 0}) or {}
+    return {
+        "upi_id": doc.get("upi_id", UPI_ID),
+        "upi_payee_name": doc.get("upi_payee_name", UPI_PAYEE_NAME),
+        "gst_percent": doc.get("gst_percent", 18.0),
+    }
+
+
+@api.patch("/admin/settings")
+async def update_settings(payload: SettingsUpdate, admin=Depends(get_current_admin)):
+    updates = {k: v for k, v in payload.model_dump().items() if v is not None}
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    await db.settings.update_one({"_id": "global"}, {"$set": updates}, upsert=True)
+    doc = await db.settings.find_one({"_id": "global"}, {"_id": 0})
+    return doc
+
+
+@api.post("/admin/password")
+async def change_admin_password(payload: AdminPasswordChange, admin=Depends(get_current_admin)):
+    email = admin["sub"]
+    doc = await db.admins.find_one({"email": email}, {"_id": 0})
+    if not doc or not bcrypt.checkpw(payload.current_password.encode(), doc["password_hash"].encode()):
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+    if len(payload.new_password) < 6:
+        raise HTTPException(status_code=400, detail="New password must be at least 6 characters")
+    new_hash = bcrypt.hashpw(payload.new_password.encode(), bcrypt.gensalt()).decode()
+    await db.admins.update_one({"email": email}, {"$set": {"password_hash": new_hash}})
+    return {"ok": True}
+
+
+@api.get("/admin/customers")
+async def list_customers(admin=Depends(get_current_admin)):
+    users = await db.users.find({}, {"_id": 0}).sort("created_at", -1).to_list(2000)
+    results = []
+    for u in users:
+        bookings_count = await db.bookings.count_documents({"user_id": u["user_id"]})
+        # sum totals for completed/paid
+        agg = db.bookings.aggregate([
+            {"$match": {"user_id": u["user_id"]}},
+            {"$group": {"_id": None, "spend": {"$sum": "$total"}}},
+        ])
+        agg_docs = await agg.to_list(1)
+        spend = agg_docs[0]["spend"] if agg_docs else 0
+        results.append({
+            "user_id": u["user_id"],
+            "email": u["email"],
+            "name": u.get("name"),
+            "phone": u.get("phone"),
+            "default_city": u.get("default_city"),
+            "default_pincode": u.get("default_pincode"),
+            "picture": u.get("picture"),
+            "referral_code": u.get("referral_code"),
+            "referral_count": u.get("referral_count", 0),
+            "bookings_count": bookings_count,
+            "total_spend": round(spend, 2),
+            "created_at": u.get("created_at"),
+        })
+    return results
+
+
+@api.get("/admin/customers/{user_id}")
+async def get_customer(user_id: str, admin=Depends(get_current_admin)):
+    u = await db.users.find_one({"user_id": user_id}, {"_id": 0})
+    if not u:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    bookings = await db.bookings.find(
+        {"user_id": user_id}, {"_id": 0}
+    ).sort("created_at", -1).to_list(500)
+    return {"customer": u, "bookings": bookings}
 
 
 # -------------------- Seeding --------------------

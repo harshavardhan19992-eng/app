@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { api, API } from "@/lib/api";
+import { api, downloadFile } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { formatINR, STATUS_COLOR, STATUS_LABEL, cn } from "@/lib/utils";
@@ -12,6 +12,7 @@ export default function CustomerDashboard() {
   const [bookings, setBookings] = useState([]);
   const [fetching, setFetching] = useState(true);
   const [referral, setReferral] = useState(null);
+  const [profile, setProfile] = useState(null);
   const [copied, setCopied] = useState(false);
   const navigate = useNavigate();
 
@@ -27,6 +28,7 @@ export default function CustomerDashboard() {
       .catch(() => toast.error("Could not load bookings"))
       .finally(() => setFetching(false));
     api.get("/referral").then((r) => setReferral(r.data)).catch(() => {});
+    api.get("/profile").then((r) => setProfile(r.data)).catch(() => {});
   }, [user, loading, navigate]);
 
   const copyReferral = async () => {
@@ -43,18 +45,7 @@ export default function CustomerDashboard() {
   };
 
   const downloadInvoice = (booking_id) => {
-    const url = `${API}/bookings/${booking_id}/invoice.pdf`;
-    fetch(url, { credentials: "include" })
-      .then((r) => {
-        if (!r.ok) throw new Error();
-        return r.blob();
-      })
-      .then((blob) => {
-        const link = document.createElement("a");
-        link.href = URL.createObjectURL(blob);
-        link.download = `PawGroom-${booking_id}.pdf`;
-        link.click();
-      })
+    downloadFile(`/bookings/${booking_id}/invoice.pdf`, `PawGroom-${booking_id}.pdf`)
       .catch(() => toast.error("Failed to download invoice"));
   };
 
@@ -79,6 +70,26 @@ export default function CustomerDashboard() {
           New booking <ArrowRight className="w-4 h-4 ml-2" strokeWidth={1.75}/>
         </Button>
       </div>
+
+      {/* Profile completion prompt */}
+      {profile && !profile.phone && (
+        <div
+          data-testid="profile-prompt"
+          className="mb-6 rounded-2xl border border-[#D96C4A]/30 bg-[#FDFBF7] p-5 flex items-center justify-between gap-4"
+        >
+          <div>
+            <div className="font-serif-display text-xl">Add your mobile number</div>
+            <div className="text-sm text-[#5C7365]">Save it once and we&rsquo;ll auto-fill it in every booking.</div>
+          </div>
+          <Button
+            data-testid="add-mobile-btn"
+            onClick={() => navigate("/profile")}
+            className="rounded-full bg-[#D96C4A] hover:bg-[#c65e3e] text-white h-11 px-6"
+          >
+            Add now
+          </Button>
+        </div>
+      )}
 
       {/* Referral banner */}
       {referral && (

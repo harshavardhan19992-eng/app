@@ -510,3 +510,273 @@ class TestReferral:
             assert r.json().get("valid") is False
         else:
             assert r.status_code in (400, 404)
+
+
+
+# ---------- New iteration 2 tests ----------
+# Profile endpoints, admin settings, admin customers, admin password change,
+# dynamic GST from settings, booking auto-persisting phone/address to profile.
+
+class TestProfile:
+    """/api/profile GET/PATCH - requires auth, updates persist."""
+
+    def test_get_profile_unauth(self, s):
+        r = s.get(f"{API}/profile")
+        assert r.status_code == 401
+
+    def test_patch_profile_unauth(self, s):
+        r = s.patch(f"{API}/profile", json={"phone": "1234567890"})
+        assert r.status_code == 401
+
+    def test_get_profile_returns_defaults(self, s, user_headers, seeded_user):
+        r = s.get(f"{API}/profile", headers=user_headers)
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert data["user_id"] == seeded_user["user_id"]
+        assert data["email"] == seeded_user["email"]
+        # phone/address fields may be null initially
+        for k in ("phone", "default_address_line1", "default_pincode", "default_city"):
+            assert k in data
+
+    def test_patch_profile_persists(self, s, user_headers, seeded_user):
+        payload = {
+            "phone": "9123456789",
+            "default_address_line1": "TEST 42 Address Rd",
+            "default_pincode": "560001",
+            "default_city": "bangalore",
+        }
+        r = s.patch(f"{API}/profile", json=payload, headers=user_headers)
+        assert r.status_code == 200, r.text
+
+        # GET to verify persistence
+        g = s.get(f"{API}/profile", headers=user_headers)
+        assert g.status_code == 200
+        data = g.json()
+        assert data["phone"] == "9123456789"
+        assert data["default_address_line1"] == "TEST 42 Address Rd"
+        assert data["default_pincode"] == "560001"
+        assert data["default_city"] == "bangalore"
+
+
+class TestBookingAutoPersistProfile:
+    """POST /api/bookings should also update user profile phone/address."""
+
+    def test_booking_updates_profile(self, s, seeded_user):
+        # Fresh user so this test isn't affected by TestProfile ordering
+        uid = f"user_TEST_{uuid.uuid4().hex[:8]}"
+        tok = f"sess_TEST_{uuid.uuid4().hex}"
+        db.users.insert_one({
+            "user_id": uid, "email": f"TEST_{uid}@ex.com", "name": "AP",
+            "picture": None,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        db.user_sessions.insert_one({
+            "user_id": uid, "session_token": tok,
+            "expires_at": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        h = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
+        try:
+            payload = {
+                "city": "delhi", "pet_name": "Rex", "pet_type": "dog",
+                "address_line1": "TEST persisted addr", "address_line2": "",
+                "pincode": "110001", "phone": "9887766554",
+                "slot_date": "2026-03-01", "slot_time": "11:00",
+                "items": [{"service_id": "svc_x", "service_name": "Bath",
+                           "pet_type": "dog", "price": 800, "qty": 1}],
+                "payment_mode": "cash", "upi_txn_ref": None, "notes": "",
+            }
+            r = s.post(f"{API}/bookings", json=payload, headers=h)
+            assert r.status_code == 200, r.text
+
+            # GET profile — should be auto-filled from booking
+            g = s.get(f"{API}/profile", headers=h)
+            assert g.status_code == 200
+            p = g.json()
+            assert p["phone"] == "9887766554"
+            assert p["default_address_line1"] == "TEST persisted addr"
+            assert p["default_pincode"] == "110001"
+            assert p["default_city"] == "delhi"
+        finally:
+            db.user_sessions.delete_many({"user_id": uid})
+            db.bookings.delete_many({"user_id": uid})
+            db.users.delete_many({"user_id": uid})
+
+
+class TestAdminSettings:
+    """/api/admin/settings GET/PATCH and public /api/payment-info reflection."""
+
+    def test_settings_requires_auth(self, s):
+        assert s.get(f"{API}/admin/settings").status_code == 401
+        assert s.patch(f"{API}/admin/settings", json={"gst_percent": 5}).status_code == 401
+
+    def test_get_settings_returns_defaults(self, s, admin_headers):
+        r = s.get(f"{API}/admin/settings", headers=admin_headers)
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert "upi_id" in data and "upi_payee_name" in data and "gst_percent" in data
+
+    def test_patch_settings_upserts_and_reflects_in_public(self, s, admin_headers):
+        try:
+            new_upi = "TEST_pawgroom@upi"
+            new_payee = "TEST PawGroom Payee"
+            r = s.patch(f"{API}/admin/settings",
+                        json={"upi_id": new_upi, "upi_payee_name": new_payee},
+                        headers=admin_headers)
+            assert r.status_code == 200, r.text
+
+            # Public payment-info reflects
+            pub = s.get(f"{API}/payment-info").json()
+            assert pub["upi_id"] == new_upi
+            assert pub["payee_name"] == new_payee
+
+            # Admin GET reflects too
+            g = s.get(f"{API}/admin/settings", headers=admin_headers).json()
+            assert g["upi_id"] == new_upi
+            assert g["upi_payee_name"] == new_payee
+        finally:
+            # Restore defaults
+            s.patch(f"{API}/admin/settings",
+                    json={"upi_id": "pawgroom@upi",
+                          "upi_payee_name": "PawGroom Services"},
+                    headers=admin_headers)
+
+
+class TestDynamicGst:
+    """New bookings must use the current gst_percent from settings; existing snapshots preserved."""
+
+    def test_dynamic_gst_applied(self, s, admin_headers, user_headers, seeded_user):
+        # First set gst=5%
+        r = s.patch(f"{API}/admin/settings", json={"gst_percent": 5},
+                    headers=admin_headers)
+        assert r.status_code == 200
+
+        try:
+            payload = {
+                "city": "hyderabad", "pet_name": "Milo", "pet_type": "dog",
+                "address_line1": "TEST gst", "address_line2": "",
+                "pincode": "500001", "phone": "9000000001",
+                "slot_date": "2026-04-01", "slot_time": "12:00",
+                "items": [{"service_id": "svc_g", "service_name": "Nails",
+                           "pet_type": "dog", "price": 1000, "qty": 1}],
+                "payment_mode": "cash", "upi_txn_ref": None, "notes": "",
+            }
+            r = s.post(f"{API}/bookings", json=payload, headers=user_headers)
+            assert r.status_code == 200, r.text
+            b = r.json()
+            # subtotal 1000, gst 5% = 50, total 1050
+            assert b["subtotal"] == 1000
+            assert b["gst_percent"] == 5.0 or b["gst_percent"] == 5
+            assert b["gst"] == 50.0
+            assert b["total"] == 1050.0
+        finally:
+            # Reset gst to 18
+            s.patch(f"{API}/admin/settings", json={"gst_percent": 18},
+                    headers=admin_headers)
+
+    def test_gst_reset_new_booking_uses_18(self, s, admin_headers, user_headers):
+        # Confirm gst is back to 18
+        g = s.get(f"{API}/admin/settings", headers=admin_headers).json()
+        assert float(g["gst_percent"]) == 18.0
+
+        payload = {
+            "city": "chennai", "pet_name": "Coco", "pet_type": "dog",
+            "address_line1": "TEST gst2", "address_line2": "",
+            "pincode": "600001", "phone": "9000000002",
+            "slot_date": "2026-04-02", "slot_time": "13:00",
+            "items": [{"service_id": "svc_g2", "service_name": "Nails",
+                       "pet_type": "dog", "price": 1000, "qty": 1}],
+            "payment_mode": "cash", "upi_txn_ref": None, "notes": "",
+        }
+        r = s.post(f"{API}/bookings", json=payload, headers=user_headers)
+        assert r.status_code == 200
+        b = r.json()
+        assert b["gst"] == 180.0
+        assert b["total"] == 1180.0
+
+
+class TestAdminPasswordChange:
+    """POST /api/admin/password: verify + validate + restore to Admin@123."""
+
+    def test_wrong_current_password(self, s, admin_headers):
+        r = s.post(f"{API}/admin/password",
+                   json={"current_password": "WRONG", "new_password": "NewGood1"},
+                   headers=admin_headers)
+        assert r.status_code == 401
+
+    def test_short_new_password(self, s, admin_headers):
+        r = s.post(f"{API}/admin/password",
+                   json={"current_password": "Admin@123", "new_password": "abc"},
+                   headers=admin_headers)
+        assert r.status_code == 400
+
+    def test_change_and_restore(self, s, admin_headers):
+        new_pw = "TempPass!456"
+        r = s.post(f"{API}/admin/password",
+                   json={"current_password": "Admin@123", "new_password": new_pw},
+                   headers=admin_headers)
+        assert r.status_code == 200, r.text
+
+        # Old password now fails
+        r2 = s.post(f"{API}/admin/login",
+                    json={"email": "admin@pawgroom.in", "password": "Admin@123"})
+        assert r2.status_code == 401
+
+        # New password succeeds
+        r3 = s.post(f"{API}/admin/login",
+                    json={"email": "admin@pawgroom.in", "password": new_pw})
+        assert r3.status_code == 200
+        new_token = r3.json()["token"]
+
+        # Restore original password using new token
+        restore = s.post(f"{API}/admin/password",
+                         json={"current_password": new_pw, "new_password": "Admin@123"},
+                         headers={"Authorization": f"Bearer {new_token}",
+                                  "Content-Type": "application/json"})
+        assert restore.status_code == 200
+
+        # Confirm we're back to Admin@123
+        final = s.post(f"{API}/admin/login",
+                       json={"email": "admin@pawgroom.in", "password": "Admin@123"})
+        assert final.status_code == 200
+
+    def test_password_change_requires_admin_auth(self, s):
+        r = s.post(f"{API}/admin/password",
+                   json={"current_password": "Admin@123", "new_password": "abcdef"})
+        assert r.status_code == 401
+
+
+class TestAdminCustomers:
+    """/api/admin/customers listing + detail."""
+
+    def test_requires_admin_auth(self, s):
+        assert s.get(f"{API}/admin/customers").status_code == 401
+        assert s.get(f"{API}/admin/customers/nope").status_code == 401
+
+    def test_list_customers(self, s, admin_headers, seeded_user):
+        r = s.get(f"{API}/admin/customers", headers=admin_headers)
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert isinstance(data, list)
+        # Find our seeded user
+        found = next((u for u in data if u["user_id"] == seeded_user["user_id"]), None)
+        assert found is not None
+        for k in ("email", "name", "phone", "referral_code",
+                  "bookings_count", "total_spend"):
+            assert k in found
+        assert isinstance(found["bookings_count"], int)
+        assert isinstance(found["total_spend"], (int, float))
+
+    def test_customer_detail(self, s, admin_headers, seeded_user):
+        r = s.get(f"{API}/admin/customers/{seeded_user['user_id']}",
+                  headers=admin_headers)
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert "customer" in data and "bookings" in data
+        assert data["customer"]["user_id"] == seeded_user["user_id"]
+        assert isinstance(data["bookings"], list)
+
+    def test_customer_detail_not_found(self, s, admin_headers):
+        r = s.get(f"{API}/admin/customers/user_DOES_NOT_EXIST",
+                  headers=admin_headers)
+        assert r.status_code == 404

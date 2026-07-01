@@ -1,13 +1,15 @@
 import React, { useEffect, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { adminApi } from "@/lib/api";
-import { PawPrint, LayoutDashboard, CalendarCheck2, Scissors, LogOut } from "lucide-react";
+import { PawPrint, LayoutDashboard, CalendarCheck2, Scissors, LogOut, Users, Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const NAV = [
   { to: "/admin/dashboard", label: "Overview", icon: LayoutDashboard },
   { to: "/admin/bookings", label: "Bookings", icon: CalendarCheck2 },
+  { to: "/admin/customers", label: "Customers", icon: Users },
   { to: "/admin/services", label: "Services", icon: Scissors },
+  { to: "/admin/settings", label: "Settings", icon: Settings },
 ];
 
 export default function AdminShell() {

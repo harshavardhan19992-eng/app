@@ -38,6 +38,9 @@ export default function Navbar() {
                 <UserIcon className="w-3.5 h-3.5" strokeWidth={1.75} />
                 {user.name?.split(" ")[0] || "Account"}
               </Link>
+              <Link to="/profile" data-testid="nav-profile" className="hidden md:inline text-sm hover:text-[#1E3F2D]/70">
+                Profile
+              </Link>
               <Button
                 data-testid="nav-book-btn"
                 onClick={() => navigate("/book")}
